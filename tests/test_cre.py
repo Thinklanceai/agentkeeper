@@ -113,11 +113,13 @@ class TestPrioritize:
 
 
 class TestBuildContextPrompt:
-    def test_empty_memory_returns_task_only(self) -> None:
+    def test_empty_memory_renders_task(self) -> None:
         cso = CognitiveStateObject.create(agent_id="a")
         cre = CognitiveReconstructionEngine(cso)
         prompt = cre.build_context_prompt("gpt-4-turbo", "Hello?")
-        assert prompt == "Task: Hello?"
+        # The new prompt structure mentions an empty memory section explicitly.
+        assert "Hello?" in prompt
+        assert "MEMORY" in prompt
 
     def test_includes_facts_in_prompt(self) -> None:
         cso = CognitiveStateObject.create(agent_id="a")
@@ -125,7 +127,8 @@ class TestBuildContextPrompt:
         cre = CognitiveReconstructionEngine(cso)
         prompt = cre.build_context_prompt("gpt-4-turbo", "What is the budget?")
         assert "budget: 50k" in prompt
-        assert "[CRITICAL]" in prompt
+        # Critical facts are marked with a star
+        assert "★" in prompt
         assert "What is the budget?" in prompt
 
 
@@ -136,7 +139,8 @@ class TestReconstructionStats:
         cso.add_fact("nc1")
         cre = CognitiveReconstructionEngine(cso)
         stats = cre.reconstruction_stats("gpt-4-turbo")
-        expected_keys = {
+        # Legacy v0.1 keys must still be present
+        legacy_keys = {
             "total_facts",
             "selected_facts",
             "critical_total",
@@ -145,7 +149,7 @@ class TestReconstructionStats:
             "tokens_used",
             "token_budget",
         }
-        assert set(stats.keys()) == expected_keys
+        assert legacy_keys.issubset(set(stats.keys()))
 
     def test_critical_recovery_rate_is_one_when_all_fit(self) -> None:
         cso = CognitiveStateObject.create(agent_id="a")

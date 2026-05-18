@@ -1,18 +1,35 @@
 """Cognitive Reconstruction Engine.
 
 The CRE is the core of AgentKeeper. Given a CSO (the agent's cognitive
-state), a target model and a token budget, it selects the optimal subset
-of facts to inject and builds the system prompt that reconstructs the
-agent's cognitive context for that model.
+state), a target model and a token budget, it reconstructs an optimal
+system prompt that re-instates the agent's cognitive context for that
+model.
 
-This module is deterministic and side-effect free. All non-determinism
-(LLM calls, embeddings) lives in higher layers.
+Reconstruction principles (in order of priority):
+
+1. **Identity is sacred.** The agent's name, role, principles, and hard
+   constraints are always injected first, regardless of token budget.
+   Identity bytes are reserved before any fact is considered.
+
+2. **Importance is currency.** Facts are ranked by importance (0.0-1.0).
+   Facts with importance >= 0.9 (legacy "critical") are force-included,
+   evicting lower-importance facts if necessary.
+
+3. **Tiers shape narration.** Within the same importance bucket, tiers
+   are presented in a meaningful order: semantic → episodic → working
+   → archival. This produces a context that reads naturally for the LLM:
+   stable facts first, events second, ephemera last.
+
+4. **Token estimates are conservative.** We use a 4-chars-per-token rule
+   to avoid hitting hard provider limits. Precise tokenisation happens
+   at the provider boundary.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from ..cso.tiers import MemoryTier
 from ..cso.types import CognitiveStateObject, Fact
 
 
@@ -22,9 +39,20 @@ def estimate_tokens(text: str) -> int:
     Rule of thumb: ~1 token per 4 characters on average across major
     English-trained models (OpenAI, Anthropic). Slightly conservative
     for code-heavy or non-English content. Good enough for budget
-    decisions; precise tokenization happens at the provider boundary.
+    decisions; precise tokenisation happens at the provider boundary.
     """
     return max(1, len(text) // 4)
+
+
+# Order in which tiers appear in the reconstructed context.
+# Semantic first because stable structured facts give the LLM
+# the strongest grounding signal.
+_TIER_RENDER_ORDER: list[MemoryTier] = [
+    MemoryTier.SEMANTIC,
+    MemoryTier.EPISODIC,
+    MemoryTier.WORKING,
+    MemoryTier.ARCHIVAL,
+]
 
 
 class CognitiveReconstructionEngine:
@@ -33,13 +61,14 @@ class CognitiveReconstructionEngine:
     The engine does NOT inject all facts blindly. It selects, prioritises,
     and formats them based on:
 
-    1. Critical flag (force-included).
-    2. Token budget for the target model.
-    3. Token efficiency (shorter facts first when budget is tight).
+    1. Identity injection (always included, fixed cost).
+    2. Importance ranking (high importance first).
+    3. Token budget for the target model.
+    4. Token efficiency (smaller facts first within ties).
     """
 
     # Conservative budgets — leave room for the user task prompt itself.
-    # Updated to match 2026 model lineup. Unknown models fall back to DEFAULT.
+    # Unknown models fall back to DEFAULT.
     MODEL_TOKEN_LIMITS: dict[str, int] = {
         # OpenAI
         "gpt-4": 6_000,
@@ -61,6 +90,10 @@ class CognitiveReconstructionEngine:
 
     DEFAULT_TOKEN_LIMIT = 4_000
 
+    # Threshold above which a fact is force-included. Matches the legacy
+    # `critical` flag semantics.
+    CRITICAL_THRESHOLD = 0.9
+
     def __init__(self, cso: CognitiveStateObject) -> None:
         self.cso = cso
         self._count_tokens_for_all_facts()
@@ -75,24 +108,36 @@ class CognitiveReconstructionEngine:
             return max_tokens
         return self.MODEL_TOKEN_LIMITS.get(target_model, self.DEFAULT_TOKEN_LIMIT)
 
+    # --- public selection ------------------------------------------
+
     def prioritize(
         self, target_model: str, max_tokens: int | None = None
     ) -> list[Fact]:
         """Return the optimal subset of facts for a given model and budget.
 
-        Selection rules:
-        - Critical facts come first; they are force-included even when the
-          budget is tight (by evicting the largest non-critical facts).
-        - Non-critical facts are ordered by token efficiency (smaller first)
-          to maximise fact count per token spent.
-        """
-        budget = self._budget_for(target_model, max_tokens)
+        Identity (if non-empty) is rendered separately by
+        `build_context_prompt`; its byte cost is reserved here so we
+        never overrun by including the identity later.
 
-        # Critical first (group 0), then non-critical (group 1).
-        # Within each group: shortest facts first.
+        Selection rules:
+        - Facts with importance >= CRITICAL_THRESHOLD are force-included
+          (may evict lower-importance facts already selected).
+        - Non-critical facts are ordered by importance desc, then by
+          token efficiency (smaller first to maximise fact count).
+        """
+        full_budget = self._budget_for(target_model, max_tokens)
+        identity_cost = self._identity_token_cost()
+        budget = max(0, full_budget - identity_cost)
+
+        # Group 0 = critical, Group 1 = non-critical.
+        # Within each group: importance desc, then token_count asc.
         sorted_facts = sorted(
             self.cso.memory_facts,
-            key=lambda f: (0 if f.critical else 1, f.token_count),
+            key=lambda f: (
+                0 if f.importance >= self.CRITICAL_THRESHOLD else 1,
+                -f.importance,
+                f.token_count,
+            ),
         )
 
         selected: list[Fact] = []
@@ -104,19 +149,14 @@ class CognitiveReconstructionEngine:
                 used_tokens += fact.token_count
                 continue
 
-            if fact.critical:
+            if fact.importance >= self.CRITICAL_THRESHOLD:
                 # Force-include critical facts by evicting the largest
                 # non-critical fact already selected, until it fits.
                 while used_tokens + fact.token_count > budget:
-                    largest_non_critical_idx = self._find_largest_non_critical(
-                        selected
-                    )
-                    if largest_non_critical_idx is None:
-                        # No non-critical to evict. Drop this critical
-                        # rather than over-budgeting. Caller can detect
-                        # this via reconstruction_stats().
+                    evict_idx = self._find_largest_non_critical(selected)
+                    if evict_idx is None:
                         break
-                    evicted = selected.pop(largest_non_critical_idx)
+                    evicted = selected.pop(evict_idx)
                     used_tokens -= evicted.token_count
 
                 if used_tokens + fact.token_count <= budget:
@@ -125,15 +165,25 @@ class CognitiveReconstructionEngine:
 
         return selected
 
-    @staticmethod
-    def _find_largest_non_critical(facts: list[Fact]) -> int | None:
+    def _find_largest_non_critical(self, facts: list[Fact]) -> int | None:
         largest_idx = None
         largest_tokens = -1
         for i, f in enumerate(facts):
-            if not f.critical and f.token_count > largest_tokens:
+            if (
+                f.importance < self.CRITICAL_THRESHOLD
+                and f.token_count > largest_tokens
+            ):
                 largest_tokens = f.token_count
                 largest_idx = i
         return largest_idx
+
+    def _identity_token_cost(self) -> int:
+        rendered = self.cso.identity.render_for_prompt()
+        if not rendered:
+            return 0
+        return estimate_tokens(rendered)
+
+    # --- public rendering ------------------------------------------
 
     def build_context_prompt(
         self,
@@ -142,22 +192,49 @@ class CognitiveReconstructionEngine:
         max_tokens: int | None = None,
     ) -> str:
         """Build the system prompt that reconstructs the agent's context."""
+        identity_block = self.cso.identity.render_for_prompt()
         facts = self.prioritize(target_model, max_tokens)
 
-        if not facts:
-            return f"Task: {task}"
+        sections: list[str] = []
 
-        facts_text = "\n".join(
-            f"- {'[CRITICAL] ' if f.critical else ''}{f.content}" for f in facts
-        )
+        if identity_block:
+            sections.append(identity_block)
 
-        return (
-            "You are a persistent AI agent. Your memory from previous sessions:\n\n"
-            f"{facts_text}\n\n"
-            f"Current task: {task}\n\n"
-            "Use your memory to maintain continuity. "
+        if facts:
+            sections.append("MEMORY (reconstructed from prior sessions):")
+            sections.append(self._render_facts_by_tier(facts))
+        else:
+            sections.append("MEMORY: (empty)")
+
+        sections.append(f"CURRENT TASK: {task}")
+        sections.append(
+            "Use your identity and memory to maintain continuity. "
             "Do not ask for information you already have."
         )
+
+        return "\n\n".join(sections)
+
+    def _render_facts_by_tier(self, facts: list[Fact]) -> str:
+        """Render facts grouped by tier in a stable, scannable order."""
+        groups: dict[MemoryTier, list[Fact]] = {t: [] for t in _TIER_RENDER_ORDER}
+        for f in facts:
+            groups.setdefault(f.tier, []).append(f)
+
+        lines: list[str] = []
+        for tier in _TIER_RENDER_ORDER:
+            tier_facts = groups.get(tier, [])
+            if not tier_facts:
+                continue
+            lines.append(f"  [{tier.value}]")
+            for f in tier_facts:
+                marker = " ★" if f.importance >= self.CRITICAL_THRESHOLD else ""
+                if tier == MemoryTier.EPISODIC and f.when:
+                    lines.append(f"    -{marker} ({f.when}) {f.content}")
+                else:
+                    lines.append(f"    -{marker} {f.content}")
+        return "\n".join(lines)
+
+    # --- diagnostics -----------------------------------------------
 
     def reconstruction_stats(
         self, target_model: str, max_tokens: int | None = None
@@ -165,9 +242,19 @@ class CognitiveReconstructionEngine:
         """Return diagnostic stats about reconstruction for a target model."""
         selected = self.prioritize(target_model, max_tokens)
         total_facts = len(self.cso.memory_facts)
-        critical_total = len(self.cso.critical_facts())
-        critical_selected = sum(1 for f in selected if f.critical)
+        critical_total = len(
+            [f for f in self.cso.memory_facts if f.importance >= self.CRITICAL_THRESHOLD]
+        )
+        critical_selected = len(
+            [f for f in selected if f.importance >= self.CRITICAL_THRESHOLD]
+        )
         tokens_used = sum(f.token_count for f in selected)
+        full_budget = self._budget_for(target_model, max_tokens)
+        identity_cost = self._identity_token_cost()
+
+        tier_breakdown: dict[str, int] = {t.value: 0 for t in MemoryTier}
+        for f in selected:
+            tier_breakdown[f.tier.value] += 1
 
         return {
             "total_facts": total_facts,
@@ -180,5 +267,8 @@ class CognitiveReconstructionEngine:
                 else 0.0
             ),
             "tokens_used": tokens_used,
-            "token_budget": self._budget_for(target_model, max_tokens),
+            "token_budget": full_budget,
+            "identity_token_cost": identity_cost,
+            "identity_present": not self.cso.identity.is_empty(),
+            "tier_breakdown": tier_breakdown,
         }

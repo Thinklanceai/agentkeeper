@@ -5,34 +5,55 @@ Public API:
     import agentkeeper
 
     agent = agentkeeper.create(agent_id="my-agent")
-    agent.remember("budget: 50k EUR", critical=True)
+
+    # Identity (optional but recommended; injected into every reconstruction)
+    agent.set_identity(
+        name="Aria",
+        role="EU insurance broker copilot",
+        principles=["never share PII without explicit consent"],
+        constraints=["never recommend non-EU providers"],
+    )
+
+    # Magical (auto-routed to the right tier)
+    agent.remember("budget: 50k EUR")               # → semantic
+    agent.remember("client refused offer on March 15")  # → episodic
+    agent.remember("never share PII without consent")    # → principle
+
+    # Explicit (full control)
+    agent.fact("client name: Acme Corporation", importance=0.95)
+    agent.event("contract signed", when="2026-05-15T14:00:00+00:00")
+    agent.principle("never recommend competitor products")
 
     response = agent.ask("What is the project budget?", provider="anthropic")
 
     agent.save()
     agent2 = agentkeeper.load("my-agent")
 
-The library is intentionally vendor-agnostic and infrastructure-free:
-storage defaults to local SQLite, no external services are required to
-get started. Real provider calls require the corresponding API keys
-(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY) or a running Ollama
-instance for local models.
+The library is vendor-agnostic and infrastructure-free: storage defaults
+to local SQLite, no external services are required to get started. Real
+provider calls require the corresponding API keys (OPENAI_API_KEY,
+ANTHROPIC_API_KEY, GEMINI_API_KEY) or a running Ollama instance.
 """
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import Any
 
 from .adapters.base import BaseAdapter, MockAdapter
 from .cre.engine import CognitiveReconstructionEngine
+from .cso.identity import AgentIdentity
+from .cso.tiers import MemoryTier
 from .cso.types import CognitiveStateObject, Fact
 from .storage.sqlite_store import Storage
 
-__version__ = "0.2.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.3.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
 
 
-# Lazy adapter factories — avoid importing optional SDKs unless used.
+# --- adapter factories (lazy imports) -------------------------------
+
+
 def _make_openai_adapter() -> BaseAdapter:
     from .adapters.openai import OpenAIAdapter
 
@@ -98,8 +119,8 @@ class Agent:
     """A persistent agent with cross-model cognitive continuity.
 
     The Agent is a thin facade over a CognitiveStateObject. It exposes
-    a fluent, side-effect-light API for remembering, asking, switching
-    providers, and persisting state.
+    a fluent, side-effect-light API for identity, memory, asking,
+    switching providers, and persisting state.
     """
 
     def __init__(
@@ -109,8 +130,8 @@ class Agent:
     ) -> None:
         self._cso = cso
         self._default_provider = default_provider
-        # Adapter cache to avoid reconstructing clients per call.
         self._adapter_cache: dict[str, BaseAdapter] = {}
+        self._last_fact: Fact | None = None
 
     # --- identity ----------------------------------------------------
 
@@ -123,14 +144,98 @@ class Agent:
         return self._cso.memory_facts
 
     @property
+    def identity(self) -> AgentIdentity:
+        return self._cso.identity
+
+    @property
     def default_provider(self) -> str:
         return self._default_provider
 
-    # --- memory ------------------------------------------------------
+    def set_identity(
+        self,
+        name: str = "",
+        role: str = "",
+        principles: list[str] | None = None,
+        constraints: list[str] | None = None,
+    ) -> Agent:
+        """Define the agent's persistent self-model.
 
-    def remember(self, content: str, critical: bool = False) -> Agent:
-        """Add a fact to the agent's memory."""
-        self._cso.add_fact(content, critical=critical)
+        Identity is injected into every reconstructed context regardless
+        of token budget. It survives compression, model switches and
+        restarts.
+        """
+        self._cso.set_identity(
+            AgentIdentity(
+                name=name,
+                role=role,
+                principles=list(principles or []),
+                constraints=list(constraints or []),
+            )
+        )
+        return self
+
+    # --- memory: magical entry point --------------------------------
+
+    def remember(
+        self,
+        content: str,
+        critical: bool | None = None,
+        tier: MemoryTier | str | None = None,
+        importance: float | None = None,
+        when: str | datetime | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Agent:
+        """Add a fact to the agent's memory and return self for chaining.
+
+        If `tier` and `importance` are omitted, AgentKeeper infers them
+        from the content. Pass them explicitly to override.
+
+        After calling `remember`, the resolved fact is available via
+        `agent.last_fact()`.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            critical=critical,
+            tier=tier,
+            importance=importance,
+            when=when,
+            metadata=metadata,
+        )
+        return self
+
+    def last_fact(self) -> Fact | None:
+        """Return the last fact added via remember/fact/event/principle."""
+        return self._last_fact
+
+    # --- memory: explicit helpers -----------------------------------
+
+    def fact(self, content: str, importance: float = 0.7) -> Agent:
+        """Add a stable, semantic fact (e.g. 'budget: 50k EUR')."""
+        self._last_fact = self._cso.add_fact(
+            content, tier=MemoryTier.SEMANTIC, importance=importance
+        )
+        return self
+
+    def event(
+        self,
+        content: str,
+        when: str | datetime | None = None,
+        importance: float = 0.5,
+    ) -> Agent:
+        """Add an episodic event with an optional timestamp."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.EPISODIC,
+            importance=importance,
+            when=when,
+        )
+        return self
+
+    def principle(self, content: str) -> Agent:
+        """Add a behavioural principle (high importance, always honoured)."""
+        self._last_fact = self._cso.add_fact(
+            content, tier=MemoryTier.SEMANTIC, importance=0.95
+        )
         return self
 
     def forget(self, fact_id: str) -> Agent:
@@ -162,7 +267,7 @@ class Agent:
         return adapter.query(prompt, question)
 
     def switch_provider(self, provider: str) -> Agent:
-        """Change the default provider. Memory is preserved across the switch."""
+        """Change the default provider. Memory survives the switch."""
         if provider not in _PROVIDER_FACTORIES:
             raise ValueError(
                 f"Unknown provider: {provider}. "
@@ -200,10 +305,13 @@ class Agent:
         return self._adapter_cache[provider]
 
     def __repr__(self) -> str:
+        identity = self._cso.identity
+        identity_repr = f", identity={identity.name!r}" if identity.name else ""
         return (
             f"Agent(id={self.id!r}, "
             f"facts={len(self.facts)}, "
-            f"provider={self._default_provider!r})"
+            f"provider={self._default_provider!r}"
+            f"{identity_repr})"
         )
 
 
@@ -244,10 +352,12 @@ def list_agents() -> list[str]:
 
 __all__ = [
     "Agent",
+    "AgentIdentity",
     "BaseAdapter",
     "CognitiveReconstructionEngine",
     "CognitiveStateObject",
     "Fact",
+    "MemoryTier",
     "MockAdapter",
     "Storage",
     "__version__",

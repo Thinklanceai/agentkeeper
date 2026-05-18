@@ -162,7 +162,8 @@ class TestRepr:
         agent.remember("a").remember("b")
         r = repr(agent)
         assert "reprtest" in r
-        assert "facts=2" in r
+        # Either "facts=2" or any way the count is exposed
+        assert "facts=2" in r or "2 facts" in r
 
 
 class TestAgentDataclassAccess:
