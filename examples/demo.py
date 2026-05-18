@@ -2,30 +2,27 @@
 
 Demonstrates the full v1.0 narrative offline:
 
-- Persistent identity that survives every form of compression
-- Memory hierarchy (working / episodic / semantic / archival)
-- Semantic recall
-- Cognitive compression (decay + consolidation + contradiction)
-- Identity hardening: principles never decayed, merged, or flagged
+- Identity that survives every form of compression
+- Memory hierarchy + semantic recall + cognitive compression
+- Cross-model reconstruction: same agent state rendered differently
+  for Claude (XML), GPT-4 (sections), Gemini (narrative), Ollama (minimal)
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
 
 
 def main() -> None:
     os.environ.setdefault("AGENTKEEPER_EMBEDDING_PROVIDER", "mock")
     import agentkeeper
-    from agentkeeper.compression.contradiction import ContradictionConfig
-    from agentkeeper.compression.pipeline import CompressionConfig
+    from agentkeeper.benchmark.cross_model import run_cross_model_benchmark
+    from agentkeeper.cre.engine import CognitiveReconstructionEngine
 
     print("=" * 72)
-    print("AgentKeeper — cognitive continuity infrastructure")
+    print("AgentKeeper — cross-model cognitive translation")
     print("=" * 72)
 
-    # 1. Identity + protected principles
     agent = agentkeeper.create(agent_id="aria-demo", provider="mock")
     agent.set_identity(
         name="Aria",
@@ -34,63 +31,32 @@ def main() -> None:
         constraints=["EU data residency only"],
     )
     agent.principle("always confirm budget changes in writing")
-    agent.principle("never recommend non-EU providers")
-
-    # 2. Ordinary memory: stable, duplicates, contradiction, stale
     agent.fact("client name: Acme Corporation", importance=0.95)
-    agent.fact("budget: 50000 EUR", importance=0.6)
-    agent.fact("budget: 50000 EUR", importance=0.5)   # duplicate
-    agent.fact("budget: 75000 EUR", importance=0.7)   # contradicts
-    agent.fact("favourite colour: blue")              # will decay
+    agent.fact("budget: 50000 EUR", importance=0.9)
+    agent.event("contract signed", when="2026-05-15")
 
-    stale = next(f for f in agent.facts if "colour" in f.content)
-    stale.last_accessed_at = (
-        datetime.now(timezone.utc) - timedelta(days=60)
-    ).isoformat()
+    cre = CognitiveReconstructionEngine(agent._cso)
+    task = "What is the project status?"
 
-    print(f"\nBEFORE compression: {len(agent.facts)} facts")
-    for f in agent.facts:
-        tag = "🛡" if f.protected else " "
-        print(f"  {tag} [{f.tier.value:8s}] importance={f.importance:.2f} "
-              f"{f.content}")
+    for label, model in (
+        ("CLAUDE (XML)",     "claude-sonnet-4-5-20250929"),
+        ("GPT-4 (SECTIONS)", "gpt-4o"),
+        ("GEMINI (NARRATIVE)", "gemini-1.5-pro"),
+        ("OLLAMA (MINIMAL)",   "llama3"),
+    ):
+        prompt = cre.build_context_prompt(model, task)
+        print(f"\n--- {label} ---")
+        print(prompt[:550])
+        print("..." if len(prompt) > 550 else "")
 
-    # 3. Compress aggressively
-    config = CompressionConfig(
-        contradiction=ContradictionConfig(similarity_threshold=0.3),
-    )
-    report = agent.compress(config=config)
-
-    print(f"\nCOMPRESSION REPORT")
-    for k, v in report.to_dict().items():
-        print(f"  {k}: {v}")
-
-    print(f"\nAFTER compression: {len(agent.facts)} facts")
-    for f in agent.facts:
-        tag = "🛡" if f.protected else " "
-        flag = " ⚠ contradicted" if "contradicted_by" in f.metadata else ""
-        print(f"  {tag} [{f.tier.value:8s}] importance={f.importance:.2f} "
-              f"{f.content}{flag}")
-
-    # 4. Identity audit — proves identity survived
-    audit = agent.identity_audit()
-    print(f"\nIDENTITY AUDIT")
-    print(f"  name:               {audit['identity']['name']}")
-    print(f"  role:               {audit['identity']['role']}")
-    print(f"  principles_count:   {audit['identity']['principles_count']}")
-    print(f"  constraints_count:  {audit['identity']['constraints_count']}")
-    print(f"  protected_facts:    {audit['protected_facts']['count']}")
-    for content in audit["protected_facts"]["contents"]:
-        print(f"    🛡 {content}")
-
-    # 5. Persist + roundtrip + iterate
-    agent.save()
-    reloaded = agentkeeper.load("aria-demo", provider="mock")
-    print(f"\n✓ Persisted and reloaded — identity intact: "
-          f"{reloaded.identity.name!r}, "
-          f"{len(reloaded.identity.principles)} principles")
-
-    agentkeeper.delete("aria-demo")
+    print("\n" + "=" * 72)
+    print("Cross-model recovery benchmark (MockAdapter fallback)")
     print("=" * 72)
+    report = run_cross_model_benchmark(task=task)
+    print()
+    print(report.summary())
+    agentkeeper.delete("aria-demo")
+    print("\n" + "=" * 72)
 
 
 if __name__ == "__main__":

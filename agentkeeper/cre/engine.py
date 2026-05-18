@@ -34,6 +34,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..cso.tiers import MemoryTier
 from ..cso.types import CognitiveStateObject, Fact
+from ..translation.profiles import CognitiveProfile, get_profile
+from ..translation.renderers import render as render_for_profile
 
 if TYPE_CHECKING:
     from ..semantic.recaller import SemanticRecaller
@@ -120,10 +122,34 @@ class CognitiveReconstructionEngine:
             if fact.token_count == 0:
                 fact.token_count = estimate_tokens(fact.content)
 
+    def _resolve_provider(self, target_model: str) -> str:
+        """Infer the logical provider from a model or provider name."""
+        m = target_model.lower()
+        if m.startswith("claude") or m == "anthropic":
+            return "anthropic"
+        if m.startswith(("gpt", "o1", "o3", "o4")) or m == "openai":
+            return "openai"
+        if m.startswith("gemini") or m == "gemini" or m == "google":
+            return "gemini"
+        if m.startswith(("llama", "mistral", "qwen", "phi")) or m == "ollama":
+            return "ollama"
+        if m == "mock":
+            return "mock"
+        # Last-ditch: treat the input itself as a provider name.
+        return target_model
+
+    def _profile_for(self, target_model: str) -> CognitiveProfile:
+        return get_profile(self._resolve_provider(target_model))
+
     def _budget_for(self, target_model: str, max_tokens: int | None) -> int:
         if max_tokens is not None:
             return max_tokens
-        return self.MODEL_TOKEN_LIMITS.get(target_model, self.DEFAULT_TOKEN_LIMIT)
+        # Prefer the per-model exact budget when known; otherwise fall back
+        # to the provider's cognitive profile.
+        if target_model in self.MODEL_TOKEN_LIMITS:
+            return self.MODEL_TOKEN_LIMITS[target_model]
+        profile = self._profile_for(target_model)
+        return profile.effective_context_tokens
 
     # --- public selection ------------------------------------------
 
@@ -242,51 +268,17 @@ class CognitiveReconstructionEngine:
     ) -> str:
         """Build the system prompt that reconstructs the agent's context.
 
-        When a semantic recaller is attached, the `task` doubles as the
-        relevance query, biasing reconstruction toward facts that matter
-        for this specific question.
+        The format is chosen by the target provider's CognitiveProfile:
+        XML for Claude, sections for GPT-4 family, narrative for Gemini,
+        minimal for Ollama/local models. When a semantic recaller is
+        attached, the `task` doubles as the relevance query.
         """
-        identity_block = self.cso.identity.render_for_prompt()
+        profile = self._profile_for(target_model)
         facts = self.prioritize(target_model, max_tokens, query=task)
-
-        sections: list[str] = []
-
-        if identity_block:
-            sections.append(identity_block)
-
-        if facts:
-            sections.append("MEMORY (reconstructed from prior sessions):")
-            sections.append(self._render_facts_by_tier(facts))
-        else:
-            sections.append("MEMORY: (empty)")
-
-        sections.append(f"CURRENT TASK: {task}")
-        sections.append(
-            "Use your identity and memory to maintain continuity. "
-            "Do not ask for information you already have."
-        )
-
-        return "\n\n".join(sections)
-
-    def _render_facts_by_tier(self, facts: list[Fact]) -> str:
-        """Render facts grouped by tier in a stable, scannable order."""
-        groups: dict[MemoryTier, list[Fact]] = {t: [] for t in _TIER_RENDER_ORDER}
+        grouped: dict[MemoryTier, list[Fact]] = {t: [] for t in MemoryTier}
         for f in facts:
-            groups.setdefault(f.tier, []).append(f)
-
-        lines: list[str] = []
-        for tier in _TIER_RENDER_ORDER:
-            tier_facts = groups.get(tier, [])
-            if not tier_facts:
-                continue
-            lines.append(f"  [{tier.value}]")
-            for f in tier_facts:
-                marker = " ★" if f.importance >= self.CRITICAL_THRESHOLD else ""
-                if tier == MemoryTier.EPISODIC and f.when:
-                    lines.append(f"    -{marker} ({f.when}) {f.content}")
-                else:
-                    lines.append(f"    -{marker} {f.content}")
-        return "\n".join(lines)
+            grouped[f.tier].append(f)
+        return render_for_profile(profile, self.cso.identity, grouped, task)
 
     # --- diagnostics -----------------------------------------------
 

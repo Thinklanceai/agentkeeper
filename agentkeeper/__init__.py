@@ -58,8 +58,15 @@ from .semantic.base import EmbeddingProvider
 from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
 from .storage.sqlite_store import Storage
+from .translation.profiles import (
+    CognitiveProfile,
+    PromptFormat,
+    get_profile,
+    known_providers,
+    register_profile,
+)
 
-__version__ = "0.6.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.7.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
 
 
 # --- adapter factories (lazy imports) -------------------------------
@@ -590,6 +597,7 @@ __all__ = [
     "Agent",
     "AgentIdentity",
     "BaseAdapter",
+    "CognitiveProfile",
     "CognitiveReconstructionEngine",
     "CognitiveStateObject",
     "CompressionConfig",
@@ -599,12 +607,16 @@ __all__ = [
     "MemoryTier",
     "MockAdapter",
     "MockEmbeddingProvider",
+    "PromptFormat",
     "SemanticRecaller",
     "Storage",
     "__version__",
     "create",
     "delete",
+    "get_profile",
+    "known_providers",
     "list_agents",
     "load",
     "make_llm_synthesiser",
+    "register_profile",
 ]
