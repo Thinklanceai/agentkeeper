@@ -15,22 +15,28 @@ Reconstruction principles (in order of priority):
    Facts with importance >= 0.9 (legacy "critical") are force-included,
    evicting lower-importance facts if necessary.
 
-3. **Tiers shape narration.** Within the same importance bucket, tiers
-   are presented in a meaningful order: semantic → episodic → working
-   → archival. This produces a context that reads naturally for the LLM:
-   stable facts first, events second, ephemera last.
+3. **Semantic boost (optional).** When a query is provided AND a
+   semantic recaller is attached, fact importance is boosted by
+   relevance to the query. This biases reconstruction toward facts
+   that actually matter for the task at hand, instead of injecting
+   memory blindly.
 
-4. **Token estimates are conservative.** We use a 4-chars-per-token rule
-   to avoid hitting hard provider limits. Precise tokenisation happens
-   at the provider boundary.
+4. **Tiers shape narration.** Within the same importance bucket, tiers
+   are presented in a meaningful order: semantic → episodic → working
+   → archival.
+
+5. **Token estimates are conservative.** 4-chars-per-token rule.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..cso.tiers import MemoryTier
 from ..cso.types import CognitiveStateObject, Fact
+
+if TYPE_CHECKING:
+    from ..semantic.recaller import SemanticRecaller
 
 
 def estimate_tokens(text: str) -> int:
@@ -94,8 +100,19 @@ class CognitiveReconstructionEngine:
     # `critical` flag semantics.
     CRITICAL_THRESHOLD = 0.9
 
-    def __init__(self, cso: CognitiveStateObject) -> None:
+    # Maximum semantic boost added to a fact's effective importance.
+    # Tuned so a perfectly-matching fact (score=1.0) gets a meaningful
+    # bump without surpassing the critical threshold by itself —
+    # critical facts always win.
+    SEMANTIC_BOOST_MAX = 0.3
+
+    def __init__(
+        self,
+        cso: CognitiveStateObject,
+        semantic_recaller: SemanticRecaller | None = None,
+    ) -> None:
         self.cso = cso
+        self._recaller = semantic_recaller
         self._count_tokens_for_all_facts()
 
     def _count_tokens_for_all_facts(self) -> None:
@@ -111,7 +128,10 @@ class CognitiveReconstructionEngine:
     # --- public selection ------------------------------------------
 
     def prioritize(
-        self, target_model: str, max_tokens: int | None = None
+        self,
+        target_model: str,
+        max_tokens: int | None = None,
+        query: str | None = None,
     ) -> list[Fact]:
         """Return the optimal subset of facts for a given model and budget.
 
@@ -122,20 +142,28 @@ class CognitiveReconstructionEngine:
         Selection rules:
         - Facts with importance >= CRITICAL_THRESHOLD are force-included
           (may evict lower-importance facts already selected).
-        - Non-critical facts are ordered by importance desc, then by
-          token efficiency (smaller first to maximise fact count).
+        - Non-critical facts are ordered by *effective* importance desc.
+          Effective importance = importance + semantic_boost(query, fact).
+          Semantic boost is zero unless a query and a recaller are both
+          provided.
+        - Ties broken by token efficiency (smaller first).
         """
         full_budget = self._budget_for(target_model, max_tokens)
         identity_cost = self._identity_token_cost()
         budget = max(0, full_budget - identity_cost)
 
-        # Group 0 = critical, Group 1 = non-critical.
-        # Within each group: importance desc, then token_count asc.
+        boosts = self._semantic_boosts(query)
+
+        def effective_importance(f: Fact) -> float:
+            return f.importance + boosts.get(f.id, 0.0)
+
+        # Group 0 = critical (by raw importance), Group 1 = non-critical.
+        # Within each group: effective importance desc, then token_count asc.
         sorted_facts = sorted(
             self.cso.memory_facts,
             key=lambda f: (
                 0 if f.importance >= self.CRITICAL_THRESHOLD else 1,
-                -f.importance,
+                -effective_importance(f),
                 f.token_count,
             ),
         )
@@ -150,8 +178,6 @@ class CognitiveReconstructionEngine:
                 continue
 
             if fact.importance >= self.CRITICAL_THRESHOLD:
-                # Force-include critical facts by evicting the largest
-                # non-critical fact already selected, until it fits.
                 while used_tokens + fact.token_count > budget:
                     evict_idx = self._find_largest_non_critical(selected)
                     if evict_idx is None:
@@ -164,6 +190,29 @@ class CognitiveReconstructionEngine:
                     used_tokens += fact.token_count
 
         return selected
+
+    def _semantic_boosts(self, query: str | None) -> dict[str, float]:
+        """Return per-fact importance boosts based on semantic relevance.
+
+        Returns an empty dict when no query or no recaller is available.
+        """
+        if not query or self._recaller is None:
+            return {}
+        try:
+            # Pull a large top_k to score the whole short-listed set.
+            results = self._recaller.recall(
+                query, top_k=max(50, len(self.cso.memory_facts))
+            )
+        except Exception:
+            # Embedding failures must never break reconstruction.
+            return {}
+
+        boosts: dict[str, float] = {}
+        for fact, score in results:
+            # cosine ∈ [-1, 1] → clamp to [0, 1] then scale
+            clamped = max(0.0, min(1.0, score))
+            boosts[fact.id] = clamped * self.SEMANTIC_BOOST_MAX
+        return boosts
 
     def _find_largest_non_critical(self, facts: list[Fact]) -> int | None:
         largest_idx = None
@@ -191,9 +240,14 @@ class CognitiveReconstructionEngine:
         task: str,
         max_tokens: int | None = None,
     ) -> str:
-        """Build the system prompt that reconstructs the agent's context."""
+        """Build the system prompt that reconstructs the agent's context.
+
+        When a semantic recaller is attached, the `task` doubles as the
+        relevance query, biasing reconstruction toward facts that matter
+        for this specific question.
+        """
         identity_block = self.cso.identity.render_for_prompt()
-        facts = self.prioritize(target_model, max_tokens)
+        facts = self.prioritize(target_model, max_tokens, query=task)
 
         sections: list[str] = []
 

@@ -44,11 +44,13 @@ openai = ["openai>=1.30.0"]
 anthropic = ["anthropic>=0.30.0"]
 gemini = ["google-generativeai>=0.8.0"]
 dotenv = ["python-dotenv>=1.0.0"]
+semantic = ["sentence-transformers>=3.0.0"]
 all = [
     "openai>=1.30.0",
     "anthropic>=0.30.0",
     "google-generativeai>=0.8.0",
     "python-dotenv>=1.0.0",
+    "sentence-transformers>=3.0.0",
 ]
 dev = [
     "pytest>=8.0",

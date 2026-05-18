@@ -46,9 +46,12 @@ from .cre.engine import CognitiveReconstructionEngine
 from .cso.identity import AgentIdentity
 from .cso.tiers import MemoryTier
 from .cso.types import CognitiveStateObject, Fact
+from .semantic.base import EmbeddingProvider
+from .semantic.mock import MockEmbeddingProvider
+from .semantic.recaller import SemanticRecaller
 from .storage.sqlite_store import Storage
 
-__version__ = "0.3.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.4.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
 
 
 # --- adapter factories (lazy imports) -------------------------------
@@ -103,6 +106,52 @@ _PROVIDER_FACTORIES: dict[str, Any] = {
 }
 
 
+def _resolve_default_embedding_provider() -> EmbeddingProvider:
+    """Pick the best available embedding provider for this environment.
+
+    Resolution order:
+    1. AGENTKEEPER_EMBEDDING_PROVIDER env var ('sentence-transformers',
+       'openai', 'mock').
+    2. sentence-transformers if installed (recommended default).
+    3. OpenAI if OPENAI_API_KEY is set.
+    4. Mock (zero-dependency fallback for tests and offline use).
+    """
+    explicit = os.getenv("AGENTKEEPER_EMBEDDING_PROVIDER", "").strip().lower()
+
+    if explicit in ("sentence-transformers", "st", "local"):
+        from .semantic.sentence_transformers_provider import (
+            SentenceTransformerProvider,
+        )
+        return SentenceTransformerProvider(
+            model_name=os.getenv("AGENTKEEPER_EMBEDDING_MODEL") or None
+        )
+
+    if explicit == "openai":
+        from .semantic.openai_provider import OpenAIEmbeddingProvider
+        return OpenAIEmbeddingProvider(
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            model_name=os.getenv("AGENTKEEPER_EMBEDDING_MODEL") or None,
+        )
+
+    if explicit == "mock":
+        return MockEmbeddingProvider()
+
+    # Auto-detect: prefer sentence-transformers if importable
+    try:
+        from .semantic.sentence_transformers_provider import (
+            SentenceTransformerProvider,
+        )
+        return SentenceTransformerProvider()
+    except ImportError:
+        pass
+
+    if os.getenv("OPENAI_API_KEY"):
+        from .semantic.openai_provider import OpenAIEmbeddingProvider
+        return OpenAIEmbeddingProvider(api_key=os.environ["OPENAI_API_KEY"])
+
+    return MockEmbeddingProvider()
+
+
 # A single shared Storage instance per process. The DB path may be
 # overridden via the AGENTKEEPER_DB environment variable.
 _storage: Storage | None = None
@@ -127,11 +176,14 @@ class Agent:
         self,
         cso: CognitiveStateObject,
         default_provider: str = "anthropic",
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self._cso = cso
         self._default_provider = default_provider
         self._adapter_cache: dict[str, BaseAdapter] = {}
         self._last_fact: Fact | None = None
+        self._embedding_provider = embedding_provider
+        self._recaller: SemanticRecaller | None = None
 
     # --- identity ----------------------------------------------------
 
@@ -243,7 +295,43 @@ class Agent:
         self._cso.memory_facts = [
             f for f in self._cso.memory_facts if f.id != fact_id
         ]
+        if self._recaller is not None:
+            self._recaller.remove(fact_id)
         return self
+
+    # --- semantic recall --------------------------------------------
+
+    def set_embedding_provider(self, provider: EmbeddingProvider) -> Agent:
+        """Override the default embedding provider for this agent.
+
+        Triggers a rebuild of the index on next recall.
+        """
+        self._embedding_provider = provider
+        self._recaller = None
+        return self
+
+    def recall(
+        self,
+        query: str,
+        top_k: int = 5,
+        min_score: float = 0.0,
+    ) -> list[tuple[Fact, float]]:
+        """Find facts most semantically similar to `query`.
+
+        Returns up to `top_k` `(Fact, score)` pairs sorted by cosine
+        similarity descending. Pairs below `min_score` are filtered.
+        """
+        recaller = self._get_recaller()
+        return recaller.recall(query, top_k=top_k, min_score=min_score)
+
+    def _get_recaller(self) -> SemanticRecaller:
+        if self._recaller is None:
+            if self._embedding_provider is None:
+                self._embedding_provider = _resolve_default_embedding_provider()
+            self._recaller = SemanticRecaller(
+                self._embedding_provider, self._cso
+            )
+        return self._recaller
 
     # --- interaction -------------------------------------------------
 
@@ -256,11 +344,14 @@ class Agent:
         """Ask the agent a question.
 
         The cognitive context is reconstructed for the target provider
-        under the given token budget, then injected as the system prompt.
+        under the given token budget, with semantic relevance boosting
+        when a recaller is available.
         """
         chosen = provider or self._default_provider
         adapter = self._get_adapter(chosen)
-        cre = CognitiveReconstructionEngine(self._cso)
+        cre = CognitiveReconstructionEngine(
+            self._cso, semantic_recaller=self._maybe_recaller()
+        )
         prompt = cre.build_context_prompt(
             chosen, question, max_tokens=token_budget
         )
@@ -304,6 +395,15 @@ class Agent:
             self._adapter_cache[provider] = _PROVIDER_FACTORIES[provider]()
         return self._adapter_cache[provider]
 
+    def _maybe_recaller(self) -> SemanticRecaller | None:
+        """Return the recaller if one was explicitly configured.
+
+        Unlike _get_recaller, this never triggers default provider
+        resolution — `ask()` works without embeddings unless the user
+        opts in via recall() or set_embedding_provider().
+        """
+        return self._recaller
+
     def __repr__(self) -> str:
         identity = self._cso.identity
         identity_repr = f", identity={identity.name!r}" if identity.name else ""
@@ -321,6 +421,7 @@ class Agent:
 def create(
     agent_id: str | None = None,
     provider: str = "anthropic",
+    embedding_provider: EmbeddingProvider | None = None,
 ) -> Agent:
     """Create a new agent with a fresh cognitive state."""
     if provider not in _PROVIDER_FACTORIES:
@@ -329,15 +430,27 @@ def create(
             f"Available: {sorted(_PROVIDER_FACTORIES)}"
         )
     cso = CognitiveStateObject.create(agent_id=agent_id)
-    return Agent(cso, default_provider=provider)
+    return Agent(
+        cso,
+        default_provider=provider,
+        embedding_provider=embedding_provider,
+    )
 
 
-def load(agent_id: str, provider: str = "anthropic") -> Agent:
+def load(
+    agent_id: str,
+    provider: str = "anthropic",
+    embedding_provider: EmbeddingProvider | None = None,
+) -> Agent:
     """Load an existing agent from storage."""
     cso = _get_storage().load(agent_id)
     if cso is None:
         raise ValueError(f"Agent {agent_id!r} not found in storage.")
-    return Agent(cso, default_provider=provider)
+    return Agent(
+        cso,
+        default_provider=provider,
+        embedding_provider=embedding_provider,
+    )
 
 
 def delete(agent_id: str) -> None:
@@ -356,9 +469,12 @@ __all__ = [
     "BaseAdapter",
     "CognitiveReconstructionEngine",
     "CognitiveStateObject",
+    "EmbeddingProvider",
     "Fact",
     "MemoryTier",
     "MockAdapter",
+    "MockEmbeddingProvider",
+    "SemanticRecaller",
     "Storage",
     "__version__",
     "create",
