@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentkeeper"
-version = "0.2.0.dev0"
+version = "0.8.0.dev0"
 description = "Cognitive continuity infrastructure for long-lived AI agents"
 readme = "README.md"
 license = { text = "MIT" }
@@ -54,6 +54,7 @@ all = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=5.0",
     "ruff>=0.6.0",
     "mypy>=1.10",
@@ -75,6 +76,7 @@ agentkeeper = ["py.typed"]
 minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["agentkeeper"]

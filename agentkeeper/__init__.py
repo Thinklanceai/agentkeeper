@@ -42,6 +42,7 @@ from datetime import datetime
 from typing import Any
 
 from .adapters.base import BaseAdapter, MockAdapter
+from .async_agent import AsyncAgent, create_async, load_async
 from .compression.llm_synth import make_llm_synthesiser
 from .compression.pipeline import (
     CompressionConfig,
@@ -54,6 +55,18 @@ from .cre.engine import CognitiveReconstructionEngine
 from .cso.identity import AgentIdentity
 from .cso.tiers import MemoryTier
 from .cso.types import CognitiveStateObject, Fact
+from .errors import (
+    AgentKeeperError,
+    AgentNotFoundError,
+    CompressionError,
+    ConfigurationError,
+    EmbeddingError,
+    ProviderError,
+    RetriableProviderError,
+    UnknownProviderError,
+    UnknownTierError,
+)
+from .logging import get_logger
 from .semantic.base import EmbeddingProvider
 from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
@@ -66,7 +79,9 @@ from .translation.profiles import (
     register_profile,
 )
 
-__version__ = "0.7.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.8.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+
+_log = get_logger(__name__)
 
 
 # --- adapter factories (lazy imports) -------------------------------
@@ -490,7 +505,7 @@ class Agent:
     def switch_provider(self, provider: str) -> Agent:
         """Change the default provider. Memory survives the switch."""
         if provider not in _PROVIDER_FACTORIES:
-            raise ValueError(
+            raise UnknownProviderError(
                 f"Unknown provider: {provider}. "
                 f"Available: {sorted(_PROVIDER_FACTORIES)}"
             )
@@ -520,7 +535,7 @@ class Agent:
 
     def _get_adapter(self, provider: str) -> BaseAdapter:
         if provider not in _PROVIDER_FACTORIES:
-            raise ValueError(f"Unknown provider: {provider}")
+            raise UnknownProviderError(f"Unknown provider: {provider}")
         if provider not in self._adapter_cache:
             self._adapter_cache[provider] = _PROVIDER_FACTORIES[provider]()
         return self._adapter_cache[provider]
@@ -555,7 +570,7 @@ def create(
 ) -> Agent:
     """Create a new agent with a fresh cognitive state."""
     if provider not in _PROVIDER_FACTORIES:
-        raise ValueError(
+        raise UnknownProviderError(
             f"Unknown provider: {provider}. "
             f"Available: {sorted(_PROVIDER_FACTORIES)}"
         )
@@ -575,7 +590,7 @@ def load(
     """Load an existing agent from storage."""
     cso = _get_storage().load(agent_id)
     if cso is None:
-        raise ValueError(f"Agent {agent_id!r} not found in storage.")
+        raise AgentNotFoundError(f"Agent {agent_id!r} not found in storage.")
     return Agent(
         cso,
         default_provider=provider,
@@ -596,27 +611,40 @@ def list_agents() -> list[str]:
 __all__ = [
     "Agent",
     "AgentIdentity",
+    "AgentKeeperError",
+    "AgentNotFoundError",
+    "AsyncAgent",
     "BaseAdapter",
     "CognitiveProfile",
     "CognitiveReconstructionEngine",
     "CognitiveStateObject",
     "CompressionConfig",
+    "CompressionError",
     "CompressionReport",
+    "ConfigurationError",
+    "EmbeddingError",
     "EmbeddingProvider",
     "Fact",
     "MemoryTier",
     "MockAdapter",
     "MockEmbeddingProvider",
     "PromptFormat",
+    "ProviderError",
+    "RetriableProviderError",
     "SemanticRecaller",
     "Storage",
+    "UnknownProviderError",
+    "UnknownTierError",
     "__version__",
     "create",
+    "create_async",
     "delete",
+    "get_logger",
     "get_profile",
     "known_providers",
     "list_agents",
     "load",
+    "load_async",
     "make_llm_synthesiser",
     "register_profile",
 ]

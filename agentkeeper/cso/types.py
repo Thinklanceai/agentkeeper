@@ -39,7 +39,9 @@ def _normalise_tier(tier: MemoryTier | str | None) -> MemoryTier | None:
         return tier
     if isinstance(tier, str):
         if not is_valid_tier(tier):
-            raise ValueError(
+            from ..errors import UnknownTierError
+
+            raise UnknownTierError(
                 f"Unknown tier: {tier!r}. "
                 f"Valid: {[t.value for t in MemoryTier]}"
             )
