@@ -1,13 +1,12 @@
 """AgentKeeper demo — cognitive continuity infrastructure.
 
-This demo runs the full v1.0 narrative offline (no API keys required):
+Demonstrates the full v1.0 narrative offline:
 
-- AK-2: persistent identity + memory hierarchy
-- AK-3: semantic recall
-- AK-4: cognitive compression (decay + consolidation + contradiction)
-
-Compression keeps long-lived agents coherent: duplicate facts collapse,
-contradictions are resolved, and stale low-importance facts decay.
+- Persistent identity that survives every form of compression
+- Memory hierarchy (working / episodic / semantic / archival)
+- Semantic recall
+- Cognitive compression (decay + consolidation + contradiction)
+- Identity hardening: principles never decayed, merged, or flagged
 """
 
 from __future__ import annotations
@@ -22,64 +21,76 @@ def main() -> None:
     from agentkeeper.compression.contradiction import ContradictionConfig
     from agentkeeper.compression.pipeline import CompressionConfig
 
-    print("=" * 70)
-    print("AgentKeeper — cognitive continuity in action")
-    print("=" * 70)
+    print("=" * 72)
+    print("AgentKeeper — cognitive continuity infrastructure")
+    print("=" * 72)
 
+    # 1. Identity + protected principles
     agent = agentkeeper.create(agent_id="aria-demo", provider="mock")
     agent.set_identity(
         name="Aria",
         role="EU insurance broker copilot",
-        principles=["never share PII without consent"],
+        principles=["never share PII without explicit consent"],
         constraints=["EU data residency only"],
     )
+    agent.principle("always confirm budget changes in writing")
+    agent.principle("never recommend non-EU providers")
 
-    # Seed: stable facts, duplicates, an outdated value, a stale note
+    # 2. Ordinary memory: stable, duplicates, contradiction, stale
     agent.fact("client name: Acme Corporation", importance=0.95)
     agent.fact("budget: 50000 EUR", importance=0.6)
-    agent.fact("budget: 50000 EUR", importance=0.5)  # duplicate
-    agent.fact("budget: 75000 EUR", importance=0.7)  # contradicts above
-    agent.fact("favourite colour: blue")             # low importance, will decay
+    agent.fact("budget: 50000 EUR", importance=0.5)   # duplicate
+    agent.fact("budget: 75000 EUR", importance=0.7)   # contradicts
+    agent.fact("favourite colour: blue")              # will decay
 
-    # Age the colour fact so decay has something to do
-    old = next(f for f in agent.facts if "colour" in f.content)
-    old.last_accessed_at = (
+    stale = next(f for f in agent.facts if "colour" in f.content)
+    stale.last_accessed_at = (
         datetime.now(timezone.utc) - timedelta(days=60)
     ).isoformat()
 
-    print(f"\n✓ Seeded {len(agent.facts)} facts (criticals, duplicates, "
-          f"contradiction, stale note)\n")
+    print(f"\nBEFORE compression: {len(agent.facts)} facts")
     for f in agent.facts:
-        print(f"  [{f.tier.value:8s}]  importance={f.importance:.2f}  "
+        tag = "🛡" if f.protected else " "
+        print(f"  {tag} [{f.tier.value:8s}] importance={f.importance:.2f} "
               f"{f.content}")
 
-    # Compress with a lower threshold so the mock embedder triggers
+    # 3. Compress aggressively
     config = CompressionConfig(
         contradiction=ContradictionConfig(similarity_threshold=0.3),
     )
     report = agent.compress(config=config)
-    print(f"\n--- Compression report ---")
+
+    print(f"\nCOMPRESSION REPORT")
     for k, v in report.to_dict().items():
         print(f"  {k}: {v}")
 
-    print(f"\n✓ Remaining facts after compression: {len(agent.facts)}")
+    print(f"\nAFTER compression: {len(agent.facts)} facts")
     for f in agent.facts:
+        tag = "🛡" if f.protected else " "
         flag = " ⚠ contradicted" if "contradicted_by" in f.metadata else ""
-        print(f"  [{f.tier.value:8s}]  importance={f.importance:.2f}  "
+        print(f"  {tag} [{f.tier.value:8s}] importance={f.importance:.2f} "
               f"{f.content}{flag}")
 
-    flagged = agent.contradictions()
-    if flagged:
-        print(f"\n⚠ {len(flagged)} fact(s) flagged as contradicted:")
-        for f in flagged:
-            print(f"  - {f.content}  "
-                  f"(contradicted_by={f.metadata['contradicted_by'][:8]}…, "
-                  f"reason={f.metadata['contradiction_reason']})")
+    # 4. Identity audit — proves identity survived
+    audit = agent.identity_audit()
+    print(f"\nIDENTITY AUDIT")
+    print(f"  name:               {audit['identity']['name']}")
+    print(f"  role:               {audit['identity']['role']}")
+    print(f"  principles_count:   {audit['identity']['principles_count']}")
+    print(f"  constraints_count:  {audit['identity']['constraints_count']}")
+    print(f"  protected_facts:    {audit['protected_facts']['count']}")
+    for content in audit["protected_facts"]["contents"]:
+        print(f"    🛡 {content}")
 
+    # 5. Persist + roundtrip + iterate
     agent.save()
-    print(f"\n✓ Persisted and verified — agent state survives compression.")
+    reloaded = agentkeeper.load("aria-demo", provider="mock")
+    print(f"\n✓ Persisted and reloaded — identity intact: "
+          f"{reloaded.identity.name!r}, "
+          f"{len(reloaded.identity.principles)} principles")
+
     agentkeeper.delete("aria-demo")
-    print("=" * 70)
+    print("=" * 72)
 
 
 if __name__ == "__main__":

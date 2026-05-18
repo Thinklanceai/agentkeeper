@@ -64,10 +64,10 @@ def decayed_importance(
 ) -> float:
     """Compute the effective importance of a fact at time `now`.
 
-    Pure function — does not mutate the fact. Critical facts are
-    returned unchanged.
+    Pure function — does not mutate the fact. Protected facts and
+    facts at or above the immortal threshold are returned unchanged.
     """
-    if fact.importance >= config.immortal_threshold:
+    if fact.protected or fact.importance >= config.immortal_threshold:
         return fact.importance
 
     days = max(0.0, days_since_last_access(fact, now=now))
@@ -85,11 +85,11 @@ def apply_decay_in_place(
     """Mutate facts' `importance` to their decayed values.
 
     Returns the number of facts whose importance changed.
-    Critical facts are left untouched.
+    Protected and critical facts are left untouched.
     """
     changed = 0
     for fact in facts:
-        if fact.importance >= config.immortal_threshold:
+        if fact.protected or fact.importance >= config.immortal_threshold:
             continue
         new_importance = decayed_importance(fact, now=now, config=config)
         if not math.isclose(new_importance, fact.importance, rel_tol=1e-6):

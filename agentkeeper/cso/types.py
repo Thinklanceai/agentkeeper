@@ -58,6 +58,10 @@ class Fact:
         importance: Float 0.0 - 1.0. Higher = harder to evict.
                     The CRE force-includes facts with importance >= 0.9
                     (called "critical" in the legacy API).
+        protected: Identity-level facts (principles, hard constraints).
+                   Protected facts are NEVER decayed, consolidated, or
+                   flagged as contradicted. They survive every form of
+                   cognitive compression.
         token_count: Approximate token count. Computed lazily by the CRE.
         created_at: ISO-8601 UTC timestamp of creation.
         last_accessed_at: Updated whenever this fact is retrieved.
@@ -71,6 +75,7 @@ class Fact:
     content: str
     tier: MemoryTier = MemoryTier.SEMANTIC
     importance: float = 0.5
+    protected: bool = False
     token_count: int = 0
     created_at: str = field(default_factory=_utcnow_iso)
     last_accessed_at: str = field(default_factory=_utcnow_iso)
@@ -97,6 +102,7 @@ class Fact:
         importance: float | None = None,
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
+        protected: bool = False,
     ) -> Fact:
         """Build a Fact with smart defaults.
 
@@ -104,6 +110,8 @@ class Fact:
         1. If `tier` is given explicitly, use it; otherwise infer from content.
         2. If `importance` is given, use it; otherwise infer from content+tier.
         3. If `critical=True` is passed (legacy), promote importance to >= 0.95.
+        4. If `protected=True`, force `importance >= 0.95` and mark the
+           fact exempt from all compression passes.
         """
         resolved_tier = _normalise_tier(tier) or infer_tier(content)
 
@@ -118,6 +126,9 @@ class Fact:
             # legacy non-critical default
             resolved_importance = min(resolved_importance, 0.5)
 
+        if protected and resolved_importance < 0.95:
+            resolved_importance = 0.95
+
         when_iso: str | None = None
         if isinstance(when, datetime):
             when_iso = when.isoformat()
@@ -129,6 +140,7 @@ class Fact:
             content=content,
             tier=resolved_tier,
             importance=resolved_importance,
+            protected=protected,
             when=when_iso,
             metadata=dict(metadata) if metadata else {},
         )
@@ -141,6 +153,7 @@ class Fact:
             "content": self.content,
             "tier": self.tier.value,
             "importance": self.importance,
+            "protected": self.protected,
             "token_count": self.token_count,
             "created_at": self.created_at,
             "last_accessed_at": self.last_accessed_at,
@@ -167,6 +180,7 @@ class Fact:
             content=data["content"],
             tier=tier,
             importance=float(importance),
+            protected=bool(data.get("protected", False)),
             token_count=int(data.get("token_count", 0)),
             created_at=data.get("created_at", _utcnow_iso()),
             last_accessed_at=data.get("last_accessed_at", _utcnow_iso()),
@@ -210,6 +224,7 @@ class CognitiveStateObject:
         importance: float | None = None,
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
+        protected: bool = False,
     ) -> Fact:
         """Add a fact. Backward compatible with the v0.1 signature."""
         fact = Fact.create(
@@ -219,6 +234,7 @@ class CognitiveStateObject:
             importance=importance,
             when=when,
             metadata=metadata,
+            protected=protected,
         )
         self.memory_facts.append(fact)
         self.updated_at = _utcnow_iso()

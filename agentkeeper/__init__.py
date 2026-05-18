@@ -59,7 +59,7 @@ from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
 from .storage.sqlite_store import Storage
 
-__version__ = "0.5.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.6.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
 
 
 # --- adapter factories (lazy imports) -------------------------------
@@ -217,22 +217,74 @@ class Agent:
         role: str = "",
         principles: list[str] | None = None,
         constraints: list[str] | None = None,
+        merge: bool = False,
     ) -> Agent:
         """Define the agent's persistent self-model.
 
         Identity is injected into every reconstructed context regardless
         of token budget. It survives compression, model switches and
         restarts.
+
+        Args:
+            name, role: Replace if provided, ignored if empty (in merge mode).
+            principles: Behavioural commitments.
+            constraints: Hard limits.
+            merge: When True, principles and constraints are appended
+                to the existing identity (deduplicated). When False
+                (default), the entire identity is replaced.
         """
+        if merge:
+            existing = self._cso.identity
+            new_name = name or existing.name
+            new_role = role or existing.role
+            new_principles = list(existing.principles)
+            for p in principles or []:
+                if p not in new_principles:
+                    new_principles.append(p)
+            new_constraints = list(existing.constraints)
+            for c in constraints or []:
+                if c not in new_constraints:
+                    new_constraints.append(c)
+        else:
+            new_name = name
+            new_role = role
+            new_principles = list(principles or [])
+            new_constraints = list(constraints or [])
+
         self._cso.set_identity(
             AgentIdentity(
-                name=name,
-                role=role,
-                principles=list(principles or []),
-                constraints=list(constraints or []),
+                name=new_name,
+                role=new_role,
+                principles=new_principles,
+                constraints=new_constraints,
             )
         )
         return self
+
+    def identity_audit(self) -> dict[str, Any]:
+        """Return a diagnostic snapshot of the agent's identity layer.
+
+        Useful for verifying that compression, save/load and provider
+        switches have not eroded the agent's self-model.
+        """
+        identity = self._cso.identity
+        protected_facts = [f for f in self._cso.memory_facts if f.protected]
+        return {
+            "identity": {
+                "name": identity.name,
+                "role": identity.role,
+                "principles_count": len(identity.principles),
+                "constraints_count": len(identity.constraints),
+                "is_empty": identity.is_empty(),
+                "token_cost": (
+                    CognitiveReconstructionEngine(self._cso)._identity_token_cost()
+                ),
+            },
+            "protected_facts": {
+                "count": len(protected_facts),
+                "contents": [f.content for f in protected_facts],
+            },
+        }
 
     # --- memory: magical entry point --------------------------------
 
@@ -292,9 +344,17 @@ class Agent:
         return self
 
     def principle(self, content: str) -> Agent:
-        """Add a behavioural principle (high importance, always honoured)."""
+        """Add a behavioural principle (high importance, protected from compression).
+
+        Principles are core to the agent's identity and survive every
+        form of compression (decay, consolidation, contradiction). They
+        are always injected into reconstructed context.
+        """
         self._last_fact = self._cso.add_fact(
-            content, tier=MemoryTier.SEMANTIC, importance=0.95
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=0.95,
+            protected=True,
         )
         return self
 

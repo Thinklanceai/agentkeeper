@@ -144,7 +144,13 @@ def detect_and_resolve(
     result = ContradictionResult()
     now = now or datetime.now(timezone.utc)
 
-    targets = [f for f in facts if f.tier.value in config.target_tiers]
+    # Only target facts in eligible tiers AND not protected. Identity-level
+    # facts (principles, hard constraints) are exempt from arbitration —
+    # they define the agent and cannot be overruled by ordinary memory.
+    targets = [
+        f for f in facts
+        if f.tier.value in config.target_tiers and not f.protected
+    ]
     if len(targets) < 2:
         return result
 

@@ -82,9 +82,11 @@ def consolidate(
     synthesiser = synthesiser or _canonical_content
     result = ConsolidationResult()
 
-    # Only consider facts in target tiers
+    # Only consider facts in target tiers AND not protected (principles,
+    # hard constraints). Protected facts are exempt from any compression.
     targets = [
-        f for f in facts if f.tier.value in config.target_tiers
+        f for f in facts
+        if f.tier.value in config.target_tiers and not f.protected
     ]
     if len(targets) < 2:
         return result
