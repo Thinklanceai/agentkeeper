@@ -42,6 +42,14 @@ from datetime import datetime
 from typing import Any
 
 from .adapters.base import BaseAdapter, MockAdapter
+from .compression.llm_synth import make_llm_synthesiser
+from .compression.pipeline import (
+    CompressionConfig,
+    CompressionReport,
+)
+from .compression.pipeline import (
+    compress as _compress_pipeline,
+)
 from .cre.engine import CognitiveReconstructionEngine
 from .cso.identity import AgentIdentity
 from .cso.tiers import MemoryTier
@@ -51,7 +59,7 @@ from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
 from .storage.sqlite_store import Storage
 
-__version__ = "0.4.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "0.5.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
 
 
 # --- adapter factories (lazy imports) -------------------------------
@@ -333,6 +341,61 @@ class Agent:
             )
         return self._recaller
 
+    # --- cognitive compression --------------------------------------
+
+    def compress(
+        self,
+        config: CompressionConfig | None = None,
+        use_llm: bool = False,
+        llm_provider: str | None = None,
+    ) -> CompressionReport:
+        """Run the cognitive compression pipeline against this agent.
+
+        Args:
+            config: Override individual pass toggles and thresholds.
+                If None, defaults run all three passes (decay,
+                consolidation, contradiction).
+            use_llm: When True, use the agent's LLM provider to
+                synthesise consolidated facts (richer summaries but
+                slower and consumes tokens). When False (default),
+                consolidation keeps canonical facts unchanged.
+            llm_provider: Provider to use for synthesis. Defaults to
+                this agent's default provider.
+
+        Returns:
+            A `CompressionReport` describing what changed. The agent's
+            facts are mutated in place; reflect to disk via `save()`.
+        """
+        # Make sure an embedding provider exists — semantic passes need it.
+        recaller = self._get_recaller()
+        synth = None
+        if use_llm:
+            provider_name = llm_provider or self._default_provider
+            adapter = self._get_adapter(provider_name)
+            synth = make_llm_synthesiser(adapter)
+        report = _compress_pipeline(
+            self._cso,
+            embedding_provider=recaller.provider,
+            config=config,
+            synthesiser=synth,
+        )
+        # Recaller's index may now be stale (facts removed / content changed).
+        # Force a rebuild on next recall.
+        self._recaller = None
+        return report
+
+    def contradictions(self) -> list[Fact]:
+        """Return facts that have been flagged as contradicted.
+
+        These facts carry a `contradicted_by` entry in their metadata.
+        They are kept (with reduced importance) so the user can inspect
+        and decide whether to re-promote or delete them.
+        """
+        return [
+            f for f in self._cso.memory_facts
+            if "contradicted_by" in f.metadata
+        ]
+
     # --- interaction -------------------------------------------------
 
     def ask(
@@ -469,6 +532,8 @@ __all__ = [
     "BaseAdapter",
     "CognitiveReconstructionEngine",
     "CognitiveStateObject",
+    "CompressionConfig",
+    "CompressionReport",
     "EmbeddingProvider",
     "Fact",
     "MemoryTier",
@@ -481,4 +546,5 @@ __all__ = [
     "delete",
     "list_agents",
     "load",
+    "make_llm_synthesiser",
 ]

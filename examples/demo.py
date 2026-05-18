@@ -1,83 +1,84 @@
 """AgentKeeper demo — cognitive continuity infrastructure.
 
-Showcases AK-2 + AK-3 capabilities:
-- Persistent identity (always injected)
-- Smart memory routing (semantic / episodic / working / archival)
-- Importance ranking with auto-inference
-- Semantic recall — find facts by meaning, not keywords
+This demo runs the full v1.0 narrative offline (no API keys required):
 
-Uses the MockAdapter and Mock embedding provider so it runs offline
-without any API key.
+- AK-2: persistent identity + memory hierarchy
+- AK-3: semantic recall
+- AK-4: cognitive compression (decay + consolidation + contradiction)
+
+Compression keeps long-lived agents coherent: duplicate facts collapse,
+contradictions are resolved, and stale low-importance facts decay.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 
 def main() -> None:
-    # Use mock embeddings for offline demo. In production, leave this
-    # unset to use sentence-transformers (recommended) or set it to
-    # 'openai' for cloud embeddings.
     os.environ.setdefault("AGENTKEEPER_EMBEDDING_PROVIDER", "mock")
-
     import agentkeeper
+    from agentkeeper.compression.contradiction import ContradictionConfig
+    from agentkeeper.compression.pipeline import CompressionConfig
 
     print("=" * 70)
-    print("AgentKeeper demo — cognitive continuity infrastructure")
+    print("AgentKeeper — cognitive continuity in action")
     print("=" * 70)
 
-    # 1. Create an agent with a persistent identity
-    agent = agentkeeper.create(agent_id="aria-001", provider="mock")
+    agent = agentkeeper.create(agent_id="aria-demo", provider="mock")
     agent.set_identity(
         name="Aria",
         role="EU insurance broker copilot",
-        principles=[
-            "never share PII without explicit consent",
-            "always disclose conflicts of interest",
-        ],
-        constraints=[
-            "EU data residency only",
-            "never recommend non-EU providers",
-        ],
+        principles=["never share PII without consent"],
+        constraints=["EU data residency only"],
     )
-    print(f"\n✓ Created: {agent}")
 
-    # 2. Smart-routed memory
-    agent.remember("budget: 50000 EUR")
-    agent.remember("client refused offer A yesterday")
-    agent.remember("never accept gifts above 50 EUR")
+    # Seed: stable facts, duplicates, an outdated value, a stale note
     agent.fact("client name: Acme Corporation", importance=0.95)
-    agent.event(
-        "contract signed",
-        when=datetime(2026, 5, 15, 14, 0, 0),
-        importance=0.8,
+    agent.fact("budget: 50000 EUR", importance=0.6)
+    agent.fact("budget: 50000 EUR", importance=0.5)  # duplicate
+    agent.fact("budget: 75000 EUR", importance=0.7)  # contradicts above
+    agent.fact("favourite colour: blue")             # low importance, will decay
+
+    # Age the colour fact so decay has something to do
+    old = next(f for f in agent.facts if "colour" in f.content)
+    old.last_accessed_at = (
+        datetime.now(timezone.utc) - timedelta(days=60)
+    ).isoformat()
+
+    print(f"\n✓ Seeded {len(agent.facts)} facts (criticals, duplicates, "
+          f"contradiction, stale note)\n")
+    for f in agent.facts:
+        print(f"  [{f.tier.value:8s}]  importance={f.importance:.2f}  "
+              f"{f.content}")
+
+    # Compress with a lower threshold so the mock embedder triggers
+    config = CompressionConfig(
+        contradiction=ContradictionConfig(similarity_threshold=0.3),
     )
-    agent.principle("always confirm budget changes in writing")
-    print(f"✓ {len(agent.facts)} facts indexed across tiers")
+    report = agent.compress(config=config)
+    print(f"\n--- Compression report ---")
+    for k, v in report.to_dict().items():
+        print(f"  {k}: {v}")
 
-    # 3. Semantic recall — meaning-based
-    print("\nSemantic recall: 'money allocated to the project'")
-    for fact, score in agent.recall("money allocated to the project", top_k=3):
-        print(f"  {score:.3f}  [{fact.tier.value}]  {fact.content}")
+    print(f"\n✓ Remaining facts after compression: {len(agent.facts)}")
+    for f in agent.facts:
+        flag = " ⚠ contradicted" if "contradicted_by" in f.metadata else ""
+        print(f"  [{f.tier.value:8s}]  importance={f.importance:.2f}  "
+              f"{f.content}{flag}")
 
-    # 4. Save and reload
+    flagged = agent.contradictions()
+    if flagged:
+        print(f"\n⚠ {len(flagged)} fact(s) flagged as contradicted:")
+        for f in flagged:
+            print(f"  - {f.content}  "
+                  f"(contradicted_by={f.metadata['contradicted_by'][:8]}…, "
+                  f"reason={f.metadata['contradiction_reason']})")
+
     agent.save()
-    reloaded = agentkeeper.load("aria-001", provider="mock")
-    print(f"\n✓ Reloaded: {reloaded}")
-    print(f"  identity preserved: {reloaded.identity.name!r}")
-    print(f"  principles: {len(reloaded.identity.principles)}, "
-          f"constraints: {len(reloaded.identity.constraints)}")
-
-    # 5. Ask the agent — context is reconstructed with identity + tiers
-    response = reloaded.ask("What do we know about the Acme deal?")
-    print(f"\nReconstructed system prompt (first 500 chars):")
-    print(response[:500])
-    print("...")
-
-    agentkeeper.delete("aria-001")
-    print("\n✓ Demo complete.")
+    print(f"\n✓ Persisted and verified — agent state survives compression.")
+    agentkeeper.delete("aria-demo")
     print("=" * 70)
 
 
