@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentkeeper": {
+      "command": "agentkeeper-mcp",
+      "args": [
+        "--agent-id", "cursor-default",
+        "--provider", "anthropic"
+      ]
+    }
+  }
+}

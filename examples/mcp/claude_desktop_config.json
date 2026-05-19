@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "agentkeeper-aria": {
+      "command": "agentkeeper-mcp",
+      "args": [
+        "--agent-id", "aria",
+        "--provider", "anthropic"
+      ],
+      "env": {
+        "AGENTKEEPER_DB": "~/.agentkeeper/aria.db",
+        "AGENTKEEPER_EMBEDDING_PROVIDER": "sentence_transformers"
+      }
+    }
+  }
+}
