@@ -276,6 +276,7 @@ class CognitiveStateObject:
 
     agent_id: str
     memory_facts: list[Fact] = field(default_factory=list)
+    triples: list[Any] = field(default_factory=list)
     identity: AgentIdentity = field(default_factory=AgentIdentity)
     created_at: str = field(default_factory=_utcnow_iso)
     updated_at: str = field(default_factory=_utcnow_iso)
@@ -371,13 +372,19 @@ class CognitiveStateObject:
             "agent_id": self.agent_id,
             "identity": self.identity.to_dict(),
             "memory_facts": [f.to_dict() for f in self.memory_facts],
+            "triples": [
+                t.to_dict() if hasattr(t, "to_dict") else dict(t)
+                for t in self.triples
+            ],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "schema_version": 2,
+            "schema_version": 3,
         }
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> CognitiveStateObject:
+        from ..graph.triple import Triple
+
         identity_data = data.get("identity", {}) or {}
         cso = CognitiveStateObject(
             agent_id=data["agent_id"],
@@ -386,4 +393,5 @@ class CognitiveStateObject:
             identity=AgentIdentity.from_dict(identity_data),
         )
         cso.memory_facts = [Fact.from_dict(f) for f in data.get("memory_facts", [])]
+        cso.triples = [Triple.from_dict(t) for t in data.get("triples", [])]
         return cso

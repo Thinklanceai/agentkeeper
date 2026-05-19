@@ -279,6 +279,81 @@ class AsyncAgent:
         )
         return self
 
+    # --- graph memory (AK-14) --------------------------------------
+
+    def link(
+        self,
+        subject: str,
+        predicate: str,
+        object: str,
+        confidence: float = 1.0,
+        protected: bool = False,
+        ttl: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> AsyncAgent:
+        """Add a directed relation to the agent's graph."""
+        from .graph.triple import Triple
+
+        triple = Triple.create(
+            subject=subject,
+            predicate=predicate,
+            object=object,
+            confidence=confidence,
+            protected=protected,
+            ttl=ttl,
+            metadata=metadata,
+        )
+        self._cso.triples.append(triple)
+        if hasattr(self, "_graph") and self._graph is not None:
+            self._graph._invalidate()
+        return self
+
+    def unlink(
+        self,
+        subject: str | None = None,
+        predicate: str | None = None,
+        object: str | None = None,
+    ) -> int:
+        """Remove triples matching the given pattern. See Agent.unlink."""
+        before = len(self._cso.triples)
+        self._cso.triples = [
+            t for t in self._cso.triples
+            if t.protected or not (
+                (subject is None or t.subject == subject)
+                and (predicate is None or t.predicate == predicate)
+                and (object is None or t.object == object)
+            )
+        ]
+        removed = before - len(self._cso.triples)
+        if removed and hasattr(self, "_graph") and self._graph is not None:
+            self._graph._invalidate()
+        return removed
+
+    @property
+    def graph(self) -> Any:
+        """Return a `RelationGraph` view over this agent's triples."""
+        from .graph.relation_graph import RelationGraph
+
+        if not hasattr(self, "_graph") or self._graph is None:
+            self._graph = RelationGraph(self._cso)
+        return self._graph
+
+    @property
+    def triples(self) -> list[Any]:
+        """All triples currently held by the agent."""
+        return self._cso.triples
+
+    def find_related(
+        self,
+        entity: str,
+        max_hops: int = 2,
+        direction: str = "both",
+    ) -> dict[str, int]:
+        """Return entities reachable from `entity` within `max_hops`."""
+        return self.graph.find_related(
+            entity, max_hops=max_hops, direction=direction
+        )
+
     def last_fact(self) -> Fact | None:
         return self._last_fact
 

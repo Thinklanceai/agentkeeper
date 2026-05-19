@@ -67,6 +67,7 @@ from .errors import (
     UnknownProviderError,
     UnknownTierError,
 )
+from .graph import RelationGraph, Triple
 from .logging import get_logger
 from .retention import MemoryPolicy, compute_expires_at, is_expired, parse_ttl
 from .semantic.base import EmbeddingProvider
@@ -489,6 +490,114 @@ class Agent:
         )
         return self
 
+    # --- graph memory (AK-14) --------------------------------------
+
+    def link(
+        self,
+        subject: str,
+        predicate: str,
+        object: str,
+        confidence: float = 1.0,
+        protected: bool = False,
+        ttl: Any = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Agent:
+        """Add a directed relation to the agent's graph.
+
+        Triples capture structure (Alice -[works_at]-> Acme), separate
+        from facts which capture prose. Use facts for recall, triples
+        for traversal.
+
+        Example::
+
+            agent.link("Acme", "owned_by", "Globex")
+            agent.link("Alice", "works_at", "Acme")
+            agent.find_related("Globex")  # → ['Acme', 'Alice'] via 1-2 hops
+
+        Args:
+            subject, predicate, object: The relation.
+            confidence: 0-1, defaults to 1.0 (asserted).
+            protected: Survives compression and default purges.
+            ttl: Optional time-to-live (timedelta, '30d', etc.).
+            metadata: Free-form dict (e.g. source fact id).
+        """
+        from .graph.triple import Triple
+
+        triple = Triple.create(
+            subject=subject,
+            predicate=predicate,
+            object=object,
+            confidence=confidence,
+            protected=protected,
+            ttl=ttl,
+            metadata=metadata,
+        )
+        self._cso.triples.append(triple)
+        # Invalidate any cached graph index next time it's queried.
+        if hasattr(self, "_graph") and self._graph is not None:
+            self._graph._invalidate()
+        return self
+
+    def unlink(
+        self,
+        subject: str | None = None,
+        predicate: str | None = None,
+        object: str | None = None,
+    ) -> int:
+        """Remove triples matching the given pattern.
+
+        Any argument can be None to match anything in that slot.
+        Returns the number of triples removed. Protected triples are
+        preserved (use `gdpr_purge` to remove those).
+        """
+        before = len(self._cso.triples)
+        self._cso.triples = [
+            t for t in self._cso.triples
+            if t.protected or not (
+                (subject is None or t.subject == subject)
+                and (predicate is None or t.predicate == predicate)
+                and (object is None or t.object == object)
+            )
+        ]
+        removed = before - len(self._cso.triples)
+        if removed and hasattr(self, "_graph") and self._graph is not None:
+            self._graph._invalidate()
+        return removed
+
+    @property
+    def graph(self) -> Any:
+        """Return a `RelationGraph` view over this agent's triples.
+
+        The graph is constructed once per agent and re-uses cached
+        indices until a triple is added/removed.
+        """
+        from .graph.relation_graph import RelationGraph
+
+        if not hasattr(self, "_graph") or self._graph is None:
+            self._graph = RelationGraph(self._cso)
+        return self._graph
+
+    @property
+    def triples(self) -> list[Any]:
+        """All triples currently held by the agent."""
+        return self._cso.triples
+
+    def find_related(
+        self,
+        entity: str,
+        max_hops: int = 2,
+        direction: str = "both",
+    ) -> dict[str, int]:
+        """Return entities reachable from `entity` within `max_hops`.
+
+        Returns a dict {entity: hop_distance}, where the starting
+        entity is at distance 0. Useful for context expansion: 'show
+        me everything connected to Acme'.
+        """
+        return self.graph.find_related(
+            entity, max_hops=max_hops, direction=direction
+        )
+
     def forget(self, fact_id: str) -> Agent:
         """Remove a fact by ID. No-op if the ID does not exist."""
         self._cso.memory_facts = [
@@ -712,6 +821,10 @@ class Agent:
             },
             "tier_distribution": tier_distribution,
             "fact_type_distribution": type_distribution,
+            "graph": {
+                "triples": len(self._cso.triples),
+                "entities": len(self.graph.entities()) if self._cso.triples else 0,
+            },
             "identity": {
                 "present": not identity.is_empty(),
                 "name": identity.name,
@@ -738,11 +851,11 @@ class Agent:
         return getattr(self._cso, "memory_policy", None)
 
     def purge_expired(self) -> int:
-        """Remove facts whose `expires_at` is in the past.
+        """Remove facts AND triples whose `expires_at` is in the past.
 
-        Returns the number of facts purged. Protected facts are
-        always preserved. Also updates the semantic index if one is
-        attached.
+        Returns the total number of items purged (facts + triples).
+        Protected items are always preserved. Updates the semantic
+        index if one is attached.
         """
         from datetime import datetime, timezone
 
@@ -764,17 +877,28 @@ class Agent:
             if self._recaller is not None:
                 for fid in purged_ids:
                     self._recaller.remove(fid)
-        return len(purged_ids)
+
+        # Purge expired triples too
+        triples_before = len(self._cso.triples)
+        self._cso.triples = [
+            t for t in self._cso.triples
+            if t.protected or not (
+                t.expires_at and is_expired(t.expires_at, now=now)
+            )
+        ]
+        triples_purged = triples_before - len(self._cso.triples)
+        if triples_purged and hasattr(self, "_graph") and self._graph is not None:
+            self._graph._invalidate()
+
+        return len(purged_ids) + triples_purged
 
     def gdpr_export(self) -> dict[str, Any]:
-        """Return a JSON-serialisable export of every fact this agent
-        holds.
+        """Return a JSON-serialisable export of everything this agent
+        holds (facts, triples, identity).
 
         Useful for fulfilling GDPR Article 20 (right to data portability).
-        Includes the full Fact payload (content, type, tier, importance,
-        timestamps, metadata) plus the agent identity. Sensitive data
-        masking is the caller's responsibility — this method exports
-        whatever the agent stored verbatim.
+        Sensitive data masking is the caller's responsibility — this
+        method exports whatever the agent stored verbatim.
         """
         identity = self._cso.identity
         from datetime import datetime, timezone
@@ -790,6 +914,7 @@ class Agent:
                 "constraints": list(identity.constraints),
             },
             "facts": [f.to_dict() for f in self._cso.memory_facts],
+            "triples": [t.to_dict() for t in self._cso.triples],
         }
 
     def gdpr_purge(
@@ -797,33 +922,59 @@ class Agent:
         predicate: Any = None,
         *,
         include_protected: bool = False,
+        include_triples: bool = True,
     ) -> int:
-        """Bulk-delete facts matching `predicate`.
+        """Bulk-delete facts (and triples) matching `predicate`.
 
         Useful for fulfilling GDPR Article 17 (right to erasure).
-        `predicate` is a callable `(Fact) -> bool`. If `None`, ALL
-        non-protected facts are purged — pass `include_protected=True`
-        to also purge identity-level facts.
+        `predicate` is a callable `(item) -> bool` applied to both
+        facts and triples. If `None`, ALL non-protected items are
+        purged.
 
-        Returns the number of facts removed.
+        Pass `include_protected=True` to also remove protected items.
+        Pass `include_triples=False` to scope the purge to facts only
+        (useful when you want to scrub PII from facts but keep the
+        structural graph intact).
+
+        Returns the total number of items removed (facts + triples).
         """
+        # Facts
         purged_ids: list[str] = []
-        kept: list[Fact] = []
+        kept_facts: list[Fact] = []
         for f in self._cso.memory_facts:
-            should_purge = predicate(f) if predicate is not None else True
             if f.protected and not include_protected:
-                kept.append(f)
+                kept_facts.append(f)
                 continue
+            should_purge = predicate(f) if predicate is not None else True
             if should_purge:
                 purged_ids.append(f.id)
                 continue
-            kept.append(f)
+            kept_facts.append(f)
         if purged_ids:
-            self._cso.memory_facts = kept
+            self._cso.memory_facts = kept_facts
             if self._recaller is not None:
                 for fid in purged_ids:
                     self._recaller.remove(fid)
-        return len(purged_ids)
+
+        # Triples
+        triples_removed = 0
+        if include_triples:
+            before = len(self._cso.triples)
+            kept_triples = []
+            for t in self._cso.triples:
+                if t.protected and not include_protected:
+                    kept_triples.append(t)
+                    continue
+                should_purge = predicate(t) if predicate is not None else True
+                if should_purge:
+                    continue
+                kept_triples.append(t)
+            self._cso.triples = kept_triples
+            triples_removed = before - len(self._cso.triples)
+            if triples_removed and hasattr(self, "_graph") and self._graph is not None:
+                self._graph._invalidate()
+
+        return len(purged_ids) + triples_removed
 
     # --- internals ---------------------------------------------------
 
@@ -926,12 +1077,14 @@ __all__ = [
     "MockEmbeddingProvider",
     "PromptFormat",
     "ProviderError",
+    "RelationGraph",
     "RetriableProviderError",
     "SemanticRecaller",
     "BaseStorage",
     "EncryptedSQLiteStorage",
     "SQLiteStorage",
     "Storage",
+    "Triple",
     "UnknownProviderError",
     "UnknownTierError",
     "__version__",
