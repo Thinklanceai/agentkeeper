@@ -97,10 +97,15 @@ class TestAsyncCompress:
         assert report.facts_before >= report.facts_after
 
     @pytest.mark.asyncio
-    async def test_use_llm_not_supported(self) -> None:
+    async def test_use_llm_now_supported(self) -> None:
+        """AK-13: AsyncAgent.compress(use_llm=True) works via the
+        agent's async adapter. With the MockAdapter we just confirm
+        the call completes and returns a report — no provider drama."""
         agent = create_async(agent_id="a", provider="mock")
-        with pytest.raises(NotImplementedError):
-            await agent.compress(use_llm=True)
+        agent.fact("budget: 50k EUR")
+        agent.fact("budget: 50k EUR")  # duplicate to trigger consolidation
+        report = await agent.compress(use_llm=True)
+        assert report.facts_before >= report.facts_after
 
 
 class TestAsyncPersistence:

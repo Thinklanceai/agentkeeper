@@ -333,19 +333,25 @@ class AsyncAgent:
         config: CompressionConfig | None = None,
         use_llm: bool = False,
     ) -> CompressionReport:
-        """Run cognitive compression. Sync-only LLM synth for now (AK-7
-        ships async I/O; the LLM-backed synth still uses the sync
-        adapter to keep behaviour consistent across both APIs)."""
+        """Run cognitive compression.
+
+        When `use_llm=True`, the consolidation pass uses the agent's
+        current async provider to synthesise consolidated facts. The
+        synthesiser runs inside a thread executor so the event loop
+        is not blocked.
+
+        Vendor-agnostic by design: we never pick a provider for the
+        user. The synthesiser uses whichever async adapter the agent
+        currently has wired up (`self.default_provider`).
+        """
         recaller = self._get_recaller()
         synth = None
         if use_llm:
-            # LLM synth needs a sync adapter — caller must register one
-            # via the sync API path. We don't auto-bridge here to keep
-            # the surface narrow.
-            raise NotImplementedError(
-                "use_llm=True is not supported on AsyncAgent yet. "
-                "Use the sync Agent.compress(use_llm=True) for now."
-            )
+            from .compression.async_llm_synth import make_async_llm_synthesiser
+
+            async_adapter = self._get_adapter(self._default_provider)
+            synth = make_async_llm_synthesiser(async_adapter)
+
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
