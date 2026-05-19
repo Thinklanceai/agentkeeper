@@ -4,18 +4,23 @@ The `SemanticRecaller` is the user-facing object behind
 `agent.recall(query, top_k=5)`. It owns:
 
 - an embedding provider (sentence-transformers by default)
-- an in-memory vector index keyed by fact_id
+- a vector index keyed by fact_id (in-memory or sqlite-vec)
 
 Indexing is lazy: facts are embedded on first recall, then cached on
 the Fact's `metadata['embedding_hash']` to skip re-embedding identical
 content. Embeddings themselves live in the index, not on the Fact —
 this keeps the CSO JSON small.
 
-For now the index is in-memory only. Persistence across processes
-will be added in AK-7 via the storage backend; until then, recall
-rebuilds the index from the CSO on each Agent load. That cost is
-bounded by the number of facts (linear in fact count) and is fine
-for the ~1k-fact agents we target at v1.0.
+Index selection is automatic via `make_vector_index()`:
+
+- `AGENTKEEPER_VECTOR_INDEX=auto` (default): sqlite-vec when installed,
+  in-memory otherwise.
+- `AGENTKEEPER_VECTOR_INDEX=sqlite_vec`: force persistence.
+- `AGENTKEEPER_VECTOR_INDEX=in_memory`: force in-memory.
+
+With sqlite-vec, the index survives restarts. The recaller still
+re-validates content hashes against `_indexed_hashes` so that a
+content edit triggers a re-embed automatically.
 """
 
 from __future__ import annotations
@@ -24,7 +29,8 @@ import hashlib
 from typing import TYPE_CHECKING
 
 from .base import EmbeddingProvider
-from .index import InMemoryVectorIndex
+from .factory import make_vector_index
+from .index import VectorIndex
 
 if TYPE_CHECKING:
     from ..cso.types import CognitiveStateObject, Fact
@@ -41,10 +47,16 @@ class SemanticRecaller:
         self,
         provider: EmbeddingProvider,
         cso: CognitiveStateObject,
+        index: VectorIndex | None = None,
     ) -> None:
         self._provider = provider
         self._cso = cso
-        self._index = InMemoryVectorIndex(dimension=provider.dimension)
+        # Explicit index wins (tests, custom backends). Otherwise the
+        # factory consults env vars and availability.
+        self._index = index or make_vector_index(
+            agent_id=cso.agent_id,
+            dimension=provider.dimension,
+        )
         self._indexed_hashes: dict[str, str] = {}  # fact_id -> content_hash
 
     @property
