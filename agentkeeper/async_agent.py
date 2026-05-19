@@ -27,6 +27,7 @@ from .compression.pipeline import (
     compress as _compress_pipeline,
 )
 from .cre.engine import CognitiveReconstructionEngine
+from .cso.fact_types import FactType
 from .cso.identity import AgentIdentity
 from .cso.tiers import MemoryTier
 from .cso.types import CognitiveStateObject, Fact
@@ -210,6 +211,69 @@ class AsyncAgent:
             tier=MemoryTier.SEMANTIC,
             importance=0.95,
             protected=True,
+            fact_type=FactType.IDENTITY,
+        )
+        return self
+
+    # --- typed memory classes (AK-9) -------------------------------
+
+    def decision(self, content: str, importance: float = 0.8) -> AsyncAgent:
+        """Record a decision (5× slower decay than ordinary facts)."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.DECISION,
+        )
+        return self
+
+    def preference(self, content: str, importance: float = 0.6) -> AsyncAgent:
+        """Record a soft preference."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.PREFERENCE,
+        )
+        return self
+
+    def constraint(self, content: str, importance: float = 0.85) -> AsyncAgent:
+        """Record a situational hard limit."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.CONSTRAINT,
+        )
+        return self
+
+    def relationship(self, content: str, importance: float = 0.7) -> AsyncAgent:
+        """Record a relational fact."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.RELATIONSHIP,
+        )
+        return self
+
+    def task_state(self, content: str, importance: float = 0.5) -> AsyncAgent:
+        """Record current task progress."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.WORKING,
+            importance=importance,
+            fact_type=FactType.TASK_STATE,
+        )
+        return self
+
+    def transient(self, content: str, importance: float = 0.3) -> AsyncAgent:
+        """Record an ephemeral working-memory item."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.WORKING,
+            importance=importance,
+            fact_type=FactType.TRANSIENT,
         )
         return self
 
@@ -322,6 +386,15 @@ class AsyncAgent:
             f for f in self._cso.memory_facts
             if "contradicted_by" in f.metadata
         ]
+
+    def health(self) -> dict[str, Any]:
+        """Return a cognitive observability snapshot (same shape as Agent.health)."""
+        from . import Agent
+
+        # Build a sync Agent view over the same CSO so we reuse one
+        # implementation. We don't keep a reference — purely for the
+        # method call.
+        return Agent(self._cso, self._default_provider).health()
 
     # --- internals -------------------------------------------------
 

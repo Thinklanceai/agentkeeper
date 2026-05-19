@@ -4,12 +4,13 @@ Cognitive systems forget. AgentKeeper models this with an exponential
 decay applied to each fact's `importance` field based on how long it
 has been since the fact was last accessed.
 
-Critical facts (importance >= 0.9) and identity-level statements are
-exempt from decay — they are the agent's stable self.
+Decay is also **type-aware**: a `decision` decays 5× slower than a
+`transient` note, because they play different cognitive roles. The
+multipliers live in `agentkeeper.cso.fact_types`.
 
-The decay is intentionally gentle and predictable: a half-life of
-30 days for ordinary facts, infinite for criticals. Tunable via
-`DecayConfig`.
+Protected facts (principles, hard constraints, identity) and facts at
+or above the immortal threshold are exempt entirely — they are the
+agent's stable self.
 
 Decay is a *pure function*: it takes a Fact and a moment in time, and
 returns a new effective importance. Nothing is mutated unless the
@@ -23,6 +24,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ..cso.fact_types import half_life_multiplier
 from ..cso.types import Fact
 
 
@@ -66,13 +68,22 @@ def decayed_importance(
 
     Pure function — does not mutate the fact. Protected facts and
     facts at or above the immortal threshold are returned unchanged.
+
+    The effective half-life is `config.half_life_days *
+    half_life_multiplier(fact.fact_type)`. A `decision` decays 5× slower
+    than the default; a `transient` decays 5× faster.
     """
     if fact.protected or fact.importance >= config.immortal_threshold:
         return fact.importance
 
+    effective_half_life = (
+        config.half_life_days * half_life_multiplier(fact.fact_type)
+    )
+    if effective_half_life <= 0:
+        return fact.importance  # safety: misconfigured multiplier
+
     days = max(0.0, days_since_last_access(fact, now=now))
-    # Exponential decay: importance(t) = importance(0) * (1/2) ** (t / half_life)
-    decay_factor = math.pow(0.5, days / config.half_life_days)
+    decay_factor = math.pow(0.5, days / effective_half_life)
     decayed = fact.importance * decay_factor
     return max(config.importance_floor, decayed)
 

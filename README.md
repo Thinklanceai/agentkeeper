@@ -1,175 +1,267 @@
 # AgentKeeper
 
-**Cognitive persistence layer for AI agents.**
+**Cognitive continuity infrastructure for long-lived AI agents.**
 
-Your agent's memory survives crashes, restarts, and provider switches.
+AgentKeeper reconstructs persistent cognitive state across model switches, crashes, restarts, and constrained contexts.
+Built for agents that must survive longer than a single context window.
 
-```python
-import agentkeeper
-
-agent = agentkeeper.create()
-agent.remember("project budget: 50000 EUR", critical=True)
-agent.remember("client: Acme Corporation", critical=True)
-
-# Switch provider — memory survives
-agent.switch_provider("anthropic")
-response = agent.ask("What is the project budget?")
-# → "The project budget is 50,000 EUR."
-
-agent.save()
-agent = agentkeeper.load("my-agent")
-```
+[![PyPI version](https://img.shields.io/pypi/v/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
+[![Python versions](https://img.shields.io/pypi/pyversions/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/Thinklanceai/agentkeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/Thinklanceai/agentkeeper/actions/workflows/ci.yml)
+[![Built by ThinkLanceAI](https://img.shields.io/badge/built%20by-ThinkLanceAI-4f8cff)](https://thinklanceai.com)
 
 ---
 
-## The problem
+## Why AgentKeeper exists
 
-Every LLM call is stateless. When your agent switches providers, crashes, or restarts — it forgets everything.
+Agents don't fail because they forget facts.
+They fail because they lose **cognitive continuity** — their state, priorities, identity, and decision context drift the moment the underlying model changes, the context window fills, or the process restarts.
 
-Today:
-```
-Agent (GPT-4) → learns facts → crashes
-Agent (Claude) → starts fresh → knows nothing
-```
+AgentKeeper treats this as a systems problem, not a memory problem.
 
-With AgentKeeper:
-```
-Agent (GPT-4) → learns facts → crashes
-Agent (Claude) → resumes → 95% facts recovered
-```
+It provides:
 
----
+- A **Cognitive Reconstruction Engine** that rebuilds an agent's state for the target model, every call.
+- A **memory hierarchy** (working / episodic / semantic / archival) with importance-aware retention.
+- **Semantic recall** based on embeddings — meaning, not keywords.
+- **Cognitive compression** — decay, consolidation, contradiction arbitration.
+- **Identity persistence** — principles and hard constraints that survive every form of compression.
+- **Cross-model translation** — XML for Claude, sections for GPT-4, narrative for Gemini, minimal for local models.
 
-## How it works
-
-AgentKeeper introduces a **Cognitive Reconstruction Engine (CRE)** that sits between your agent and any LLM provider.
-
-```
-Your Agent
-    ↓
-AgentKeeper (CRE)        ← cognitive layer
-    ↓       ↓       ↓       ↓
-OpenAI  Anthropic  Gemini  Ollama  ← any provider
-```
-
-The CRE:
-1. Stores facts independently of any provider
-2. Prioritizes critical facts under token constraints
-3. Reconstructs optimal context for each target model
-4. Persists state to SQLite locally
-
-This is **not prompt engineering**. It's a cognitive state layer that's provider-agnostic by design.
-
----
-
-## Benchmark
-
-```
-100 facts stored (20 critical)
-Token budget: 2000 tokens
-Cross-model: GPT-4 → Claude (and Claude → GPT-4)
-
-Critical recovery: 19/20 = 95% (bidirectional)
-```
-
----
+Continuity, not just memory.
 
 ## Install
 
 ```bash
-git clone https://github.com/tomanciauxberner-rgb/agentkeeper
-cd agentkeeper
-pip install -r requirements.txt
-cp env.example .env  # Add your API keys
+pip install agentkeeper
 ```
 
----
+Optional extras (only install what you need):
 
-## Quickstart
+```bash
+pip install 'agentkeeper[anthropic]'    # Claude
+pip install 'agentkeeper[openai]'       # GPT models + OpenAI embeddings
+pip install 'agentkeeper[gemini]'       # Google Gemini
+pip install 'agentkeeper[semantic]'     # Local embeddings (sentence-transformers)
+pip install 'agentkeeper[all]'          # everything
+```
+
+No external infrastructure required. Storage defaults to local SQLite. Vendor-agnostic by design.
+
+## 60-second tour
 
 ```python
 import agentkeeper
 
-# Create agent
-agent = agentkeeper.create(agent_id="my-agent", provider="openai")
+# 1. Create an agent and define its persistent identity
+agent = agentkeeper.create(agent_id="aria", provider="anthropic")
+agent.set_identity(
+    name="Aria",
+    role="EU insurance broker copilot",
+    principles=["never share PII without explicit consent"],
+    constraints=["EU data residency only"],
+)
 
-# Store memory
-agent.remember("project budget: 50000 EUR", critical=True)
-agent.remember("deadline: March 1 2025", critical=True)
-agent.remember("meeting notes: discussed onboarding")
+# 2. Teach it about the world
+agent.principle("always confirm budget changes in writing")
+agent.fact("client: Acme Corporation", importance=0.95)
+agent.event("contract signed", when="2026-05-15")
+agent.remember("favourite colour: blue")  # tier inferred automatically
 
-# Ask on OpenAI
-response = agent.ask("What is the budget?", provider="openai")
+# 3. Ask — context is reconstructed for the target model
+response = agent.ask("What do we know about the Acme deal?")
 
-# Switch to Anthropic — memory survives
-response = agent.ask("What is the deadline?", provider="anthropic")
-
-# Switch to Gemini — memory survives
-response = agent.ask("Who is the client?", provider="gemini")
-
-# Switch to local Ollama — memory survives
-response = agent.ask("What is the tech stack?", provider="ollama")
-
-# Persist
-agent.save()
-
-# Restore later
-agent = agentkeeper.load("my-agent")
+# 4. Switch providers — memory and identity survive
+agent.switch_provider("openai").save()
+response = agent.ask("Same question, different model.")
 ```
 
----
+## Architecture
 
-## Supported providers
+```
+       ┌──────────────────────────────────────────────────────────────┐
+       │                  AgentKeeper Public API                       │
+       │  agent.remember() · agent.recall() · agent.ask()              │
+       │  agent.compress() · agent.set_identity() · agent.save()       │
+       └────────────────────────────┬──────────────────────────────────┘
+                                    │
+       ┌────────────────────────────▼──────────────────────────────────┐
+       │           Cognitive Reconstruction Engine (CRE)               │
+       │  Identity injection · importance ranking · semantic boost     │
+       │  Token budget · profile-driven rendering                      │
+       └─┬────────────┬────────────┬────────────┬─────────────────────┘
+         │            │            │            │
+   ┌─────▼─────┐ ┌───▼────────┐ ┌─▼─────────┐ ┌▼──────────────┐
+   │ Memory    │ │ Semantic   │ │ Cognitive │ │ Cross-Model    │
+   │ Hierarchy │ │ Recall     │ │ Compress  │ │ Translation    │
+   │           │ │            │ │           │ │                │
+   │ working   │ │ embeddings │ │ decay     │ │ XML / sections │
+   │ episodic  │ │ vector     │ │ consol.   │ │ narrative      │
+   │ semantic  │ │ index      │ │ contradic │ │ minimal        │
+   │ archival  │ │            │ │           │ │                │
+   └───────────┘ └────────────┘ └───────────┘ └────────────────┘
+                                    │
+                      ┌─────────────▼─────────────┐
+                      │   Storage (SQLite-first)  │
+                      │   Vendor-agnostic         │
+                      └───────────────────────────┘
+```
 
-| Provider | Model | Requires |
-|----------|-------|----------|
-| `openai` | gpt-4-turbo | `OPENAI_API_KEY` |
-| `anthropic` | claude-sonnet-4-5 | `ANTHROPIC_API_KEY` |
-| `gemini` | gemini-1.5-pro | `GEMINI_API_KEY` |
-| `ollama` | llama3 | Ollama running locally |
-| `mock` | — | Nothing (for testing) |
+Every layer is **interchangeable** and **opt-in**. The base CRE works with no embeddings, no compression, no profile customisation. Layers stack as you need them.
 
----
+## Cognitive continuity in five primitives
 
-## API
+### 1. Identity that never erodes
 
 ```python
-agentkeeper.create(agent_id=None, provider="anthropic") → Agent
-agentkeeper.load(agent_id) → Agent
-agentkeeper.delete(agent_id)
-
-agent.remember(content, critical=False) → Agent
-agent.forget(fact_id) → Agent
-agent.ask(question, provider=None, token_budget=4000) → str
-agent.switch_provider(provider) → Agent
-agent.save() → Agent
-agent.stats(provider=None, token_budget=4000) → dict
+agent.set_identity(
+    name="Aria",
+    role="EU broker copilot",
+    principles=["never share PII"],
+    constraints=["EU data residency only"],
+)
 ```
 
----
+Identity is injected into every reconstructed context, regardless of token budget. It survives compression, model switches, and restarts. Principles are **protected** — never decayed, never consolidated, never flagged.
 
-## Why not Temporal?
+### 2. Memory organised by tier
 
-Temporal handles **execution persistence** — your workflow doesn't crash.
+```python
+agent.fact("budget: 50k EUR")                      # semantic (stable)
+agent.event("contract signed", when="2026-05-15")  # episodic (time-anchored)
+agent.principle("always confirm changes")          # protected, identity-level
+agent.remember("favourite colour: blue")           # tier inferred automatically
+```
 
-AgentKeeper handles **cognitive persistence** — your agent doesn't forget.
+Tiers shape narration in reconstructed prompts and drive retention policy under compression.
 
-Different layers. Complementary.
+### 3. Semantic recall
 
----
+```python
+results = agent.recall("money allocated to the project", top_k=5)
+for fact, score in results:
+    print(f"{score:.2f}  {fact.content}")
+```
 
-## Roadmap
+Pluggable embedding providers: local `sentence-transformers` (default, free, no lock-in), OpenAI, or your own. Recall biases context reconstruction toward facts that actually matter for the current question.
 
-- [x] Cross-model memory continuity (OpenAI, Anthropic, Gemini, Ollama)
-- [x] Critical fact prioritization under token constraints
-- [x] SQLite persistence
-- [ ] Memory compression (v0.2)
-- [ ] Semantic memory (embeddings)
-- [ ] Multi-agent memory sharing
-- [ ] Cloud sync
+### 4. Cognitive compression
 
----
+```python
+report = agent.compress()
+# CompressionReport(
+#   decayed_facts=12,
+#   consolidation={'clusters_found': 3, 'facts_removed': 7, ...},
+#   contradictions={'pairs_found': 2, 'resolutions': 2},
+#   facts_before=120, facts_after=102,
+# )
+```
+
+Three independent passes:
+
+- **Decay** — exponential half-life on unused non-critical facts. Critical and protected facts are immortal.
+- **Consolidation** — embedding-based clustering merges near-duplicates. Optional LLM-backed synthesiser.
+- **Contradiction arbitration** — key-value divergence and polarity-opposition detection. Deterministic winner (critical > importance > recency). Loser is flagged, not deleted.
+
+### 5. Cross-model translation
+
+The same cognitive state, four formats:
+
+| Provider   | Format     | Why                                          |
+|------------|------------|-----------------------------------------------|
+| Anthropic  | XML        | Claude excels with structured `<agent_identity>` and `<memory>` blocks |
+| OpenAI     | Sections   | GPT family responds well to labelled sections (`AGENT IDENTITY`, `MEMORY`, `CURRENT TASK`) |
+| Gemini     | Narrative  | Long-context model — prefers prose framing |
+| Ollama     | Minimal    | Small/local models — aggressive compression, terse tokens |
+
+Custom providers? Register your own:
+
+```python
+from agentkeeper import CognitiveProfile, PromptFormat, register_profile
+
+register_profile(CognitiveProfile(
+    provider="my-llm",
+    format=PromptFormat.SECTIONS,
+    effective_context_tokens=10_000,
+))
+```
+
+## Async API
+
+```python
+import asyncio
+import agentkeeper
+
+async def main() -> None:
+    agent = agentkeeper.create_async(agent_id="aria", provider="anthropic")
+    agent.set_identity(name="Aria", role="copilot")
+    agent.fact("budget: 50k", importance=0.95)
+
+    # Parallel asks across providers
+    answers = await asyncio.gather(
+        agent.ask("status?", provider="anthropic"),
+        agent.ask("status?", provider="openai"),
+    )
+
+asyncio.run(main())
+```
+
+Sync and async agents share storage — you can save with one and load with the other.
+
+## Production-grade
+
+- **Type-safe**: `py.typed` marker shipped, mypy-strict friendly.
+- **Typed exceptions**: `AgentKeeperError` root, with subclasses for every failure mode (provider down, agent missing, retriable network errors).
+- **Structured logging**: namespaced under `agentkeeper.*`, opt-in.
+- **Retries**: built-in exponential backoff for transient provider errors via `with_retry` / `with_async_retry`.
+- **Tested**: 267 tests, CI on Python 3.10 / 3.11 / 3.12.
+
+## Configuration
+
+Environment variables (all optional):
+
+| Variable                          | Default                          | Purpose |
+|-----------------------------------|----------------------------------|---------|
+| `OPENAI_API_KEY`                  | —                                | Required for OpenAI provider |
+| `ANTHROPIC_API_KEY`               | —                                | Required for Anthropic provider |
+| `GEMINI_API_KEY`                  | —                                | Required for Gemini provider |
+| `OPENAI_MODEL`                    | `gpt-4-turbo`                    | OpenAI model name |
+| `ANTHROPIC_MODEL`                 | `claude-sonnet-4-5-20250929`     | Anthropic model name |
+| `OLLAMA_HOST`                     | `http://localhost:11434`         | Ollama server URL |
+| `AGENTKEEPER_DB`                  | `agentkeeper.db`                 | SQLite path |
+| `AGENTKEEPER_EMBEDDING_PROVIDER`  | auto (sentence-transformers > openai > mock) | Override embedding backend |
+
+## Roadmap (v1.x)
+
+- **v1.1** — Persistent vector index (`sqlite-vec`) so the recaller survives restarts without rebuild.
+- **v1.2** — Async LLM-backed synthesiser in compression.
+- **v1.3** — Pluggable storage backends (Postgres, encrypted).
+- **v1.4** — `AgentKeeper Cloud` (managed sync). *Stays optional; OSS remains feature-complete.*
+
+## Featured on
+
+AgentKeeper was vouched for in March 2026 by:
+
+- Shruti Codes ✓
+- Chidanand Tripathi ✓ ([80K-view thread](#))
+- Kayvon Jafarzadeh ✓
+- Leonard Rodman ✓
+- Martin Szerment ✓
+- Bespoke AI Solutions Inc ✓
+- @grok (xAI)
+
+If you've shipped agents that needed to survive across model changes, you understand why this matters. Thank you to everyone who saw the project early.
+
+## Contributing
+
+Issues, ideas, and PRs welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
-MIT
+MIT. See [LICENSE](./LICENSE).
+
+## Built by
+
+[**ThinkLanceAI**](https://thinklanceai.com) — cognitive infrastructure for AI systems.
+Need this in production with custom integrations? `hello@thinklanceai.com`.

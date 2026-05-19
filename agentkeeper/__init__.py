@@ -52,6 +52,7 @@ from .compression.pipeline import (
     compress as _compress_pipeline,
 )
 from .cre.engine import CognitiveReconstructionEngine
+from .cso.fact_types import FactType
 from .cso.identity import AgentIdentity
 from .cso.tiers import MemoryTier
 from .cso.types import CognitiveStateObject, Fact
@@ -79,7 +80,7 @@ from .translation.profiles import (
     register_profile,
 )
 
-__version__ = "0.8.0-dev"  # bumped on each sprint; v1.0.0 ships at AK-8
+__version__ = "1.1.0-dev"
 
 _log = get_logger(__name__)
 
@@ -344,9 +345,17 @@ class Agent:
     # --- memory: explicit helpers -----------------------------------
 
     def fact(self, content: str, importance: float = 0.7) -> Agent:
-        """Add a stable, semantic fact (e.g. 'budget: 50k EUR')."""
+        """Add a generic semantic fact (e.g. 'budget: 50k EUR').
+
+        Use the typed helpers (`decision`, `preference`, `constraint`,
+        `relationship`, `task_state`, `transient`) when you want the
+        compression pipeline to apply the appropriate retention policy.
+        """
         self._last_fact = self._cso.add_fact(
-            content, tier=MemoryTier.SEMANTIC, importance=importance
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.FACT,
         )
         return self
 
@@ -362,6 +371,7 @@ class Agent:
             tier=MemoryTier.EPISODIC,
             importance=importance,
             when=when,
+            fact_type=FactType.EVENT,
         )
         return self
 
@@ -377,6 +387,90 @@ class Agent:
             tier=MemoryTier.SEMANTIC,
             importance=0.95,
             protected=True,
+            fact_type=FactType.IDENTITY,
+        )
+        return self
+
+    # --- typed memory classes (AK-9) --------------------------------
+
+    def decision(self, content: str, importance: float = 0.8) -> Agent:
+        """Record a decision the agent has made.
+
+        Decisions decay 5× slower than ordinary facts. They are NOT
+        protected — they can be superseded by newer contradicting
+        decisions via the contradiction arbitration pass.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.DECISION,
+        )
+        return self
+
+    def preference(self, content: str, importance: float = 0.6) -> Agent:
+        """Record a soft preference (favourite style, tone, defaults).
+
+        Preferences decay 2× slower than ordinary facts.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.PREFERENCE,
+        )
+        return self
+
+    def constraint(self, content: str, importance: float = 0.85) -> Agent:
+        """Record a situational hard limit (token budget, region, SLA).
+
+        Distinct from `AgentIdentity.constraints` which are immutable
+        identity rules. These are environmental and can change over time.
+        Constraints decay 5× slower than ordinary facts.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.CONSTRAINT,
+        )
+        return self
+
+    def relationship(self, content: str, importance: float = 0.7) -> Agent:
+        """Record a relational fact (X works at Y, A is the parent of B)."""
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.SEMANTIC,
+            importance=importance,
+            fact_type=FactType.RELATIONSHIP,
+        )
+        return self
+
+    def task_state(self, content: str, importance: float = 0.5) -> Agent:
+        """Record current task progress.
+
+        Task-state facts decay 2× faster than ordinary facts because
+        they are most relevant while the task is active.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.WORKING,
+            importance=importance,
+            fact_type=FactType.TASK_STATE,
+        )
+        return self
+
+    def transient(self, content: str, importance: float = 0.3) -> Agent:
+        """Record an ephemeral working-memory item.
+
+        Transient facts decay 5× faster than ordinary facts. Useful for
+        intermediate computations or short-lived context.
+        """
+        self._last_fact = self._cso.add_fact(
+            content,
+            tier=MemoryTier.WORKING,
+            importance=importance,
+            fact_type=FactType.TRANSIENT,
         )
         return self
 
@@ -531,6 +625,87 @@ class Agent:
         cre = CognitiveReconstructionEngine(self._cso)
         return cre.reconstruction_stats(chosen, max_tokens=token_budget)
 
+    def health(self) -> dict[str, Any]:
+        """Return a cognitive observability snapshot.
+
+        Designed for production monitoring of long-lived agents. The
+        report covers:
+
+        - Memory volume and tier distribution.
+        - Fact-type distribution (decisions, preferences, constraints,
+          relationships, transient, ...).
+        - Importance histogram (mean, max, count above critical threshold).
+        - Stale memory ratio (facts not accessed in 30+ days).
+        - Contradiction count and protected-fact count.
+        - Identity presence.
+
+        Returns:
+            A dict suitable for logging, Prometheus export, or feeding
+            into a dashboard.
+        """
+        from datetime import datetime, timezone
+
+        from .compression.decay import days_since_last_access
+
+        now = datetime.now(timezone.utc)
+        facts = self._cso.memory_facts
+
+        tier_distribution: dict[str, int] = {t.value: 0 for t in MemoryTier}
+        type_distribution: dict[str, int] = {t.value: 0 for t in FactType}
+        importances: list[float] = []
+        stale_count = 0
+        contradicted_count = 0
+        protected_count = 0
+        critical_count = 0
+
+        for f in facts:
+            tier_distribution[f.tier.value] += 1
+            type_distribution[f.fact_type.value] += 1
+            importances.append(f.importance)
+            if f.importance >= 0.9:
+                critical_count += 1
+            if f.protected:
+                protected_count += 1
+            if "contradicted_by" in f.metadata:
+                contradicted_count += 1
+            try:
+                if days_since_last_access(f, now=now) > 30.0:
+                    stale_count += 1
+            except Exception:
+                # Malformed timestamps don't crash the health report.
+                pass
+
+        total = len(facts)
+        mean_importance = (
+            sum(importances) / total if total else 0.0
+        )
+        max_importance = max(importances) if importances else 0.0
+        stale_ratio = (stale_count / total) if total else 0.0
+
+        identity = self._cso.identity
+
+        return {
+            "total_facts": total,
+            "critical_facts": critical_count,
+            "protected_facts": protected_count,
+            "contradicted_facts": contradicted_count,
+            "stale_facts": stale_count,
+            "stale_ratio": round(stale_ratio, 3),
+            "importance": {
+                "mean": round(mean_importance, 3),
+                "max": round(max_importance, 3),
+            },
+            "tier_distribution": tier_distribution,
+            "fact_type_distribution": type_distribution,
+            "identity": {
+                "present": not identity.is_empty(),
+                "name": identity.name,
+                "role": identity.role,
+                "principles_count": len(identity.principles),
+                "constraints_count": len(identity.constraints),
+            },
+        }
+
     # --- internals ---------------------------------------------------
 
     def _get_adapter(self, provider: str) -> BaseAdapter:
@@ -625,6 +800,7 @@ __all__ = [
     "EmbeddingError",
     "EmbeddingProvider",
     "Fact",
+    "FactType",
     "MemoryTier",
     "MockAdapter",
     "MockEmbeddingProvider",

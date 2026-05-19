@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .fact_types import FactType, is_valid_fact_type
 from .identity import AgentIdentity
 from .inference import infer_importance, infer_tier
 from .tiers import MemoryTier, is_valid_tier
@@ -49,6 +50,32 @@ def _normalise_tier(tier: MemoryTier | str | None) -> MemoryTier | None:
     raise TypeError(f"tier must be MemoryTier, str, or None; got {type(tier)}")
 
 
+def _normalise_fact_type(
+    fact_type: FactType | str | None,
+) -> FactType:
+    """Coerce a fact-type argument to a FactType enum.
+
+    Unknown strings raise `UnknownTierError` (re-used as our generic
+    "unknown cognitive label" error to avoid proliferating error types).
+    """
+    if fact_type is None:
+        return FactType.FACT
+    if isinstance(fact_type, FactType):
+        return fact_type
+    if isinstance(fact_type, str):
+        if not is_valid_fact_type(fact_type):
+            from ..errors import UnknownTierError
+
+            raise UnknownTierError(
+                f"Unknown fact_type: {fact_type!r}. "
+                f"Valid: {[t.value for t in FactType]}"
+            )
+        return FactType(fact_type)
+    raise TypeError(
+        f"fact_type must be FactType, str, or None; got {type(fact_type)}"
+    )
+
+
 @dataclass
 class Fact:
     """A single unit of knowledge held by an agent.
@@ -57,6 +84,10 @@ class Fact:
         id: Stable identifier (UUID v4).
         content: The textual content of the fact.
         tier: Memory tier (working, episodic, semantic, archival).
+        fact_type: Cognitive class (decision, preference, constraint,
+                   relationship, task_state, transient, identity, event,
+                   fact). Drives decay rate and reconstruction emphasis.
+                   Defaults to `FactType.FACT`.
         importance: Float 0.0 - 1.0. Higher = harder to evict.
                     The CRE force-includes facts with importance >= 0.9
                     (called "critical" in the legacy API).
@@ -76,6 +107,7 @@ class Fact:
     id: str
     content: str
     tier: MemoryTier = MemoryTier.SEMANTIC
+    fact_type: FactType = FactType.FACT
     importance: float = 0.5
     protected: bool = False
     token_count: int = 0
@@ -105,6 +137,7 @@ class Fact:
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
         protected: bool = False,
+        fact_type: FactType | str | None = None,
     ) -> Fact:
         """Build a Fact with smart defaults.
 
@@ -114,6 +147,8 @@ class Fact:
         3. If `critical=True` is passed (legacy), promote importance to >= 0.95.
         4. If `protected=True`, force `importance >= 0.95` and mark the
            fact exempt from all compression passes.
+        5. If `fact_type` is omitted, default to `FactType.FACT` (the
+           generic semantic statement). Legacy callers see no change.
         """
         resolved_tier = _normalise_tier(tier) or infer_tier(content)
 
@@ -131,6 +166,8 @@ class Fact:
         if protected and resolved_importance < 0.95:
             resolved_importance = 0.95
 
+        resolved_type = _normalise_fact_type(fact_type)
+
         when_iso: str | None = None
         if isinstance(when, datetime):
             when_iso = when.isoformat()
@@ -141,6 +178,7 @@ class Fact:
             id=str(uuid.uuid4()),
             content=content,
             tier=resolved_tier,
+            fact_type=resolved_type,
             importance=resolved_importance,
             protected=protected,
             when=when_iso,
@@ -154,6 +192,7 @@ class Fact:
             "id": self.id,
             "content": self.content,
             "tier": self.tier.value,
+            "fact_type": self.fact_type.value,
             "importance": self.importance,
             "protected": self.protected,
             "token_count": self.token_count,
@@ -177,10 +216,14 @@ class Fact:
         if importance is None:
             importance = 0.95 if legacy_critical else 0.5
 
+        fact_type_raw = data.get("fact_type")
+        fact_type = FactType.FACT if fact_type_raw is None else FactType(fact_type_raw)
+
         return Fact(
             id=data["id"],
             content=data["content"],
             tier=tier,
+            fact_type=fact_type,
             importance=float(importance),
             protected=bool(data.get("protected", False)),
             token_count=int(data.get("token_count", 0)),
@@ -227,6 +270,7 @@ class CognitiveStateObject:
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
         protected: bool = False,
+        fact_type: FactType | str | None = None,
     ) -> Fact:
         """Add a fact. Backward compatible with the v0.1 signature."""
         fact = Fact.create(
@@ -237,10 +281,16 @@ class CognitiveStateObject:
             when=when,
             metadata=metadata,
             protected=protected,
+            fact_type=fact_type,
         )
         self.memory_facts.append(fact)
         self.updated_at = _utcnow_iso()
         return fact
+
+    def facts_of_type(self, fact_type: FactType | str) -> list[Fact]:
+        """Return all facts of a given fact_type."""
+        normalised = _normalise_fact_type(fact_type)
+        return [f for f in self.memory_facts if f.fact_type == normalised]
 
     def set_identity(self, identity: AgentIdentity) -> None:
         self.identity = identity
