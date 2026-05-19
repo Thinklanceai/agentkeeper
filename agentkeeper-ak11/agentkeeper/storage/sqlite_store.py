@@ -1,16 +1,11 @@
 """SQLite-based persistence for Cognitive State Objects.
 
-The simplest possible backend: zero infrastructure, no external
-services, fully self-contained. Suitable for development, single-tenant
-deployments, and as the default for OSS users.
+This module persists CSOs to a local SQLite database. It is intentionally
+the simplest possible backend: zero infrastructure, no external services,
+fully self-contained.
 
-For encrypted persistence, see `EncryptedSQLiteStorage`. For Postgres,
-see `PostgresStorage` (v1.2). For your own backend, implement
-`BaseStorage`.
-
-`Storage` is kept as a backward-compatible alias for `SQLiteStorage`.
-Existing v1.0 code that does `from agentkeeper import Storage`
-continues to work unchanged.
+In future versions, alternative backends (filesystem, Postgres, encrypted
+storage) will plug in via the same interface.
 """
 
 from __future__ import annotations
@@ -23,12 +18,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ..cso.types import CognitiveStateObject
-from .base import BaseStorage
 
 DEFAULT_DB_PATH = "agentkeeper.db"
 
 
-class SQLiteStorage(BaseStorage):
+class Storage:
     """Persist CSOs to a local SQLite database.
 
     The database path can be overridden via constructor argument or via
@@ -64,22 +58,6 @@ class SQLiteStorage(BaseStorage):
             )
             conn.commit()
 
-    # --- payload hooks (used by EncryptedSQLiteStorage) -------------
-
-    def _encode_payload(self, cso: CognitiveStateObject) -> str:
-        """Convert a CSO to the string actually written to disk.
-
-        Subclasses can override this to encrypt, compress, sign, ...
-        The default returns plain JSON.
-        """
-        return json.dumps(cso.to_dict())
-
-    def _decode_payload(self, payload: str) -> CognitiveStateObject:
-        """Inverse of `_encode_payload`. Subclasses override."""
-        return CognitiveStateObject.from_dict(json.loads(payload))
-
-    # --- BaseStorage --------------------------------------------------
-
     def save(self, cso: CognitiveStateObject) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -90,7 +68,7 @@ class SQLiteStorage(BaseStorage):
                 """,
                 (
                     cso.agent_id,
-                    self._encode_payload(cso),
+                    json.dumps(cso.to_dict()),
                     cso.created_at,
                     cso.updated_at,
                 ),
@@ -105,7 +83,7 @@ class SQLiteStorage(BaseStorage):
             ).fetchone()
             if row is None:
                 return None
-            return self._decode_payload(row[0])
+            return CognitiveStateObject.from_dict(json.loads(row[0]))
 
     def delete(self, agent_id: str) -> None:
         with self._connect() as conn:
@@ -113,11 +91,7 @@ class SQLiteStorage(BaseStorage):
             conn.commit()
 
     def list_agent_ids(self) -> list[str]:
+        """Return all agent IDs stored in this database."""
         with self._connect() as conn:
             rows = conn.execute("SELECT agent_id FROM agents").fetchall()
             return [row[0] for row in rows]
-
-
-# Backward-compatible alias. Existing v1.0 code that imports `Storage`
-# continues to work unchanged.
-Storage = SQLiteStorage

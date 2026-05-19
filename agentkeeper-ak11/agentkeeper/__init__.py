@@ -72,13 +72,7 @@ from .retention import MemoryPolicy, compute_expires_at, is_expired, parse_ttl
 from .semantic.base import EmbeddingProvider
 from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
-from .storage import (
-    BaseStorage,
-    EncryptedSQLiteStorage,
-    SQLiteStorage,
-    Storage,
-    make_storage,
-)
+from .storage.sqlite_store import Storage
 from .translation.profiles import (
     CognitiveProfile,
     PromptFormat,
@@ -190,17 +184,15 @@ def _resolve_default_embedding_provider() -> EmbeddingProvider:
     return MockEmbeddingProvider()
 
 
-# A single shared Storage instance per process. The backend is
-# selected via AGENTKEEPER_STORAGE (default: 'sqlite'). Re-set
-# `agentkeeper._storage = None` to force a re-resolution after env
-# changes (used in tests).
-_storage: BaseStorage | None = None
+# A single shared Storage instance per process. The DB path may be
+# overridden via the AGENTKEEPER_DB environment variable.
+_storage: Storage | None = None
 
 
-def _get_storage() -> BaseStorage:
+def _get_storage() -> Storage:
     global _storage
     if _storage is None:
-        _storage = make_storage()
+        _storage = Storage()
     return _storage
 
 
@@ -928,9 +920,6 @@ __all__ = [
     "ProviderError",
     "RetriableProviderError",
     "SemanticRecaller",
-    "BaseStorage",
-    "EncryptedSQLiteStorage",
-    "SQLiteStorage",
     "Storage",
     "UnknownProviderError",
     "UnknownTierError",
@@ -947,7 +936,6 @@ __all__ = [
     "load",
     "load_async",
     "make_llm_synthesiser",
-    "make_storage",
     "parse_ttl",
     "register_profile",
 ]

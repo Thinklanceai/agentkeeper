@@ -35,7 +35,7 @@ from .errors import AgentNotFoundError, UnknownProviderError
 from .logging import get_logger
 from .semantic.base import EmbeddingProvider
 from .semantic.recaller import SemanticRecaller
-from .storage import BaseStorage, make_storage
+from .storage.sqlite_store import Storage
 
 _log = get_logger(__name__)
 
@@ -75,13 +75,13 @@ _ASYNC_PROVIDER_FACTORIES: dict[str, Any] = {
 # --- shared storage helper ------------------------------------------
 
 
-_async_storage: BaseStorage | None = None
+_async_storage: Storage | None = None
 
 
-def _async_get_storage() -> BaseStorage:
+def _async_get_storage() -> Storage:
     global _async_storage
     if _async_storage is None:
-        _async_storage = make_storage()
+        _async_storage = Storage()
     return _async_storage
 
 

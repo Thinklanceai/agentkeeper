@@ -48,7 +48,6 @@ gemini = ["google-generativeai>=0.8.0"]
 dotenv = ["python-dotenv>=1.0.0"]
 semantic = ["sentence-transformers>=3.0.0"]
 vec = ["sqlite-vec>=0.1.6"]
-encrypted = ["cryptography>=42.0.0"]
 all = [
     "openai>=1.30.0",
     "anthropic>=0.30.0",
@@ -56,7 +55,6 @@ all = [
     "python-dotenv>=1.0.0",
     "sentence-transformers>=3.0.0",
     "sqlite-vec>=0.1.6",
-    "cryptography>=42.0.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -65,7 +63,6 @@ dev = [
     "ruff>=0.6.0",
     "mypy>=1.10",
     "sqlite-vec>=0.1.6",
-    "cryptography>=42.0.0",
 ]
 
 [project.urls]
