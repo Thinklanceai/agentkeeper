@@ -1,118 +1,84 @@
 # Changelog
 
-All notable changes to AgentKeeper are documented in this file.
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to AgentKeeper are documented here.
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] — 2026-05-18
-
-The v1.0 release reframes AgentKeeper from "cross-model memory wrapper"
-to **cognitive continuity infrastructure for long-lived AI agents**.
-Every layer of the original v0.1 architecture is preserved; the
-public API is fully backward-compatible.
+## [1.1.0] — 2026-05-19
 
 ### Added
 
-**Memory hierarchy and identity (AK-2)**
-- `MemoryTier` enum: `working`, `episodic`, `semantic`, `archival`.
-- `Fact.importance` (float 0–1) replaces internal binary `critical` flag.
-- `Fact.tier`, `Fact.created_at`, `Fact.last_accessed_at`,
-  `Fact.access_count`, `Fact.when`, `Fact.metadata`.
-- Smart tier inference from content (deterministic, no LLM).
-- `AgentIdentity` (name, role, principles, constraints) — always injected.
-- `agent.fact()`, `agent.event()`, `agent.principle()` explicit helpers.
-- `agent.set_identity()`, `agent.identity_audit()`.
+**TTL and retention (AK-9)**
+- `Fact.expires_at` and `Triple.expires_at` — absolute expiration timestamps.
+- `agent.fact(..., ttl="30d")` — shorthand TTL on any memory primitive.
+- `agent.link(..., ttl="P90D")` — TTL on graph triples.
+- `agent.purge_expired()` — removes lapsed facts and triples, keeps protected ones.
+- `agentkeeper.retention.ttl` — pure TTL parser: `timedelta`, shorthand (`"7d12h"`), ISO-8601 (`"P30D"`).
+- `agentkeeper.retention.policy` — per-tier retention policy engine.
 
-**Semantic recall (AK-3)**
-- `agentkeeper.semantic` package: `EmbeddingProvider` ABC,
-  `MockEmbeddingProvider`, `SentenceTransformerProvider`,
-  `OpenAIEmbeddingProvider`, `InMemoryVectorIndex`, `SemanticRecaller`.
-- `agent.recall(query, top_k, min_score)` for meaning-based retrieval.
-- Auto-detection: sentence-transformers → OpenAI → Mock fallback.
-- Override via `AGENTKEEPER_EMBEDDING_PROVIDER` env var.
+**Graph memory layer (AK-10)**
+- `Triple` — directed relation type: `subject -[predicate]-> object`, with `confidence`, `protected`, `ttl`, `metadata`.
+- `agent.link(subject, predicate, object, ...)` — add a structured relation.
+- `agent.find_related(entity, max_hops, direction)` — BFS traversal returning `{entity: hop_distance}`.
+- `agent.triples` — direct access to the triple store.
+- Graph triples participate in TTL expiration and compression.
 
-**Cognitive compression (AK-4)**
-- `agentkeeper.compression` package with four passes:
-  - **Decay**: exponential importance decay with 30-day half-life.
-  - **Consolidation**: cosine-similarity clustering with optional
-    LLM-backed synthesiser.
-  - **Contradiction arbitration**: key-value divergence + polarity
-    opposition, deterministic winner.
-  - **Pipeline**: orchestrates all three with toggles +
-    `CompressionReport`.
-- `agent.compress()` and `agent.contradictions()` public API.
+**Typed fact taxonomy (AK-11)**
+- `FactType` enum: `decision`, `preference`, `constraint`, `relationship`, `task_state`, `transient`, `identity`, `event`, `fact`.
+- Per-type decay rates — `transient` decays fast, `constraint` and `identity` are immortal by default.
+- `fact_type` accepted by `agent.remember()` and the MCP `add_fact` tool.
 
-**Identity hardening (AK-5)**
-- `Fact.protected` flag: principles and hard constraints exempt
-  from every compression pass.
-- `agent.principle()` sets `protected=True` automatically.
-- `agent.set_identity(merge=True)` to append principles without
-  replacing the existing identity.
-- 100-iteration compression identity-survival test.
+**Persistent vector index (AK-12)**
+- `SqliteVecIndex` — `sqlite-vec`-backed vector index that persists across restarts without rebuild.
+- Auto-selected when `sqlite-vec` is installed; falls back to `InMemoryVectorIndex` otherwise.
+- New extra: `pip install 'agentkeeper[vec]'`.
 
-**Cross-model translation (AK-6)**
-- `agentkeeper.translation` package: `CognitiveProfile`,
-  `PromptFormat`, four format-specific renderers.
-- Per-provider rendering: XML (Claude), sections (GPT-4), narrative
-  (Gemini), minimal (Ollama).
-- Profile-driven budgets replace static `DEFAULT_TOKEN_LIMIT`.
-- `register_profile()` for custom providers.
-- `run_cross_model_benchmark()` for parallel provider evaluation.
+**Encrypted storage (AK-13)**
+- `EncryptedSQLiteStorage` — payload-at-rest encryption via Fernet (AES-128-CBC + HMAC-SHA256).
+- `EncryptedSQLiteStorage.generate_key()` convenience factory.
+- Progressive migration: plain SQLite rows are detected and re-encrypted on next save.
+- New extra: `pip install 'agentkeeper[encrypted]'`.
+- `AGENTKEEPER_ENCRYPTION_KEY` env var.
 
-**Async API + production polish (AK-7)**
-- `AsyncAgent`, `create_async()`, `load_async()` — full async-native
-  facade. Shares storage with sync `Agent`.
-- `AsyncBaseAdapter`, `AsyncOpenAIAdapter`, `AsyncAnthropicAdapter`,
-  `AsyncMockAdapter`.
-- `agentkeeper.errors`: typed exception hierarchy
-  (`AgentKeeperError`, `UnknownProviderError`, `UnknownTierError`,
-  `AgentNotFoundError`, `ProviderError`, `RetriableProviderError`,
-  `ConfigurationError`, `CompressionError`, `EmbeddingError`).
-- `agentkeeper.logging`: stdlib namespaced logger with
-  `NullHandler` default.
-- `agentkeeper.retry`: `with_retry` / `with_async_retry` decorators
-  with exponential backoff + jitter.
-- Sync errors keep subclassing `ValueError` for backward compatibility.
+**Pluggable storage backends (AK-13)**
+- `BaseStorage` ABC — four-method contract for custom backends.
+- `StorageFactory` — auto-selects backend from env vars.
+- `PostgresStorage` stub declared (full implementation in v1.2).
 
-**Foundations (AK-1)**
-- Proper Python package layout (`src/*` → `agentkeeper/*`).
-- Fixed `pyproject.toml` build backend.
-- Extras: `[openai]`, `[anthropic]`, `[gemini]`, `[semantic]`,
-  `[dotenv]`, `[all]`, `[dev]`.
-- GitHub Actions CI on Python 3.10 / 3.11 / 3.12.
-- Adapter caching (no per-call reconnects).
-- `py.typed` marker for downstream type checkers.
+**MCP server (AK-15)**
+- `agentkeeper.mcp.build_server(agent_id, provider)` — FastMCP server exposing the agent's full cognitive layer.
+- `agentkeeper-mcp` CLI entry-point — `stdio`, `streamable-http`, `sse` transports.
+- Tools: `add_fact`, `recall`, `set_identity`, `link`, `find_related`, `compress`, `health`, `gdpr_export`, `purge_expired`.
+- Resources: `agentkeeper://identity`, `agentkeeper://facts/{fact_id}`.
+- Compatible with Claude Desktop, Claude Code, Cursor, and any MCP-aware client.
+- New extra: `pip install 'agentkeeper[mcp]'`.
+
+**Framework integrations (AK-14)**
+- `agentkeeper.integrations.langchain` — `langchain_system_prompt()` and `LangChainCognitiveProvider`.
+- `agentkeeper.integrations.crewai` — CrewAI cognitive provider.
+- No hard dependency on either framework — integrations work as pure string helpers.
+
+**Observability and GDPR**
+- `agent.health()` — cognitive snapshot: fact counts, importance stats, tier distribution, graph size, identity status.
+- `agent.gdpr_export()` — JSON-serialisable export of all facts, triples, and identity (GDPR Article 20).
+- `agent.forget(fact_id)` — remove a single fact and purge it from the vector index.
 
 ### Changed
 
-- Default reconstruction prompt format now adapts to the target
-  provider. v0.1 produced a single hard-coded format; v1.0 produces
-  XML for Claude, sections for OpenAI, narrative for Gemini, minimal
-  for Ollama.
-- Token budgets are now profile-driven when the model is unknown
-  (fall back to provider profile instead of `DEFAULT_TOKEN_LIMIT`).
-- Embedding resolution favours local `sentence-transformers` over
-  cloud OpenAI when both are available — preserves the "no vendor
-  lock-in" principle.
+- `pyproject.toml` version bumped to `1.1.0`.
+- New extras: `[vec]`, `[encrypted]`, `[mcp]`; `[all]` now includes all three.
+- `agentkeeper-mcp` registered as console script entry-point.
+- Test count: 267 → 459.
 
 ### Migration
 
-**Zero breaking changes.** Code written for v0.1 continues to work:
+Zero breaking changes. All v1.0 and v0.1 code continues to work unchanged.
 
-- `agent.remember(content, critical=True)` still works, and is
-  internally mapped to `tier=semantic, importance=0.95`.
-- `Fact.critical` remains a readable property
-  (`importance >= 0.9`).
-- The sync `Agent` API is unchanged.
-- v0.1 SQLite databases load automatically into v1.0 schema.
+---
 
-Optional: adopt the new helpers gradually (`agent.principle()`,
-`agent.event()`, `agent.fact()`) for clearer intent.
+## [1.0.0] — 2026-05-18
 
-## [0.1.0] — 2026-02 (initial release)
+Full v1.0 release. See [CHANGELOG_v1.0.md](./CHANGELOG_v1.0.md) or the [GitHub release notes](https://github.com/Thinklanceai/agentkeeper/releases/tag/v1.0.0) for the complete history.
 
-- Cross-model memory continuity via a Cognitive Reconstruction Engine.
-- Cognitive State Object (CSO) persistence in local SQLite.
-- Adapters for OpenAI, Anthropic, Gemini, Ollama.
-- 95% critical-fact recovery benchmark across provider switches.
-- MIT license, zero infrastructure, vendor-agnostic.
+## [0.1.0] — 2026-02
+
+Initial release: cross-model memory continuity, CSO persistence, adapters for OpenAI / Anthropic / Gemini / Ollama, 95% critical-fact recovery benchmark, MIT license.
