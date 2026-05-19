@@ -4,8 +4,8 @@
 
 Your agent survives model switches, crashes, context-window limits, and restarts — with the same identity, memory, and priorities it had before.
 
-[![PyPI version](https://img.shields.io/pypi/v/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
-[![Python versions](https://img.shields.io/pypi/pyversions/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
+[![PyPI version](https://img.shields.io/pypi/v/agentkeeper-ai.svg)](https://pypi.org/project/agentkeeper-ai/)
+[![Python versions](https://img.shields.io/pypi/pyversions/agentkeeper-ai.svg)](https://pypi.org/project/agentkeeper-ai/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![CI](https://github.com/Thinklanceai/agentkeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/Thinklanceai/agentkeeper/actions/workflows/ci.yml)
 [![Built by ThinkLanceAI](https://img.shields.io/badge/built%20by-ThinkLanceAI-4f8cff)](https://thinklanceai.com)
@@ -23,19 +23,19 @@ AgentKeeper treats this as a systems problem, not a memory problem.
 ## Install
 
 ```bash
-pip install agentkeeper
+pip install agentkeeper-ai
 ```
 
 Zero required dependencies. No external infrastructure. Storage defaults to local SQLite.
 
 ```bash
-pip install 'agentkeeper[anthropic]'   # Claude
-pip install 'agentkeeper[openai]'      # GPT + OpenAI embeddings
-pip install 'agentkeeper[gemini]'      # Gemini
-pip install 'agentkeeper[semantic]'    # Local embeddings (sentence-transformers)
-pip install 'agentkeeper[mcp]'         # MCP server (Claude Desktop, Cursor, Codex)
-pip install 'agentkeeper[encrypted]'   # Encrypted storage at rest
-pip install 'agentkeeper[all]'         # Everything
+pip install 'agentkeeper-ai[anthropic]'   # Claude
+pip install 'agentkeeper-ai[openai]'      # GPT + OpenAI embeddings
+pip install 'agentkeeper-ai[gemini]'      # Gemini
+pip install 'agentkeeper-ai[semantic]'    # Local embeddings (sentence-transformers)
+pip install 'agentkeeper-ai[mcp]'         # MCP server (Claude Desktop, Cursor, Codex)
+pip install 'agentkeeper-ai[encrypted]'   # Encrypted storage at rest
+pip install 'agentkeeper-ai[all]'         # Everything
 ```
 
 ---
@@ -344,7 +344,7 @@ snapshot = agent.health()
 ## Try it in 30 seconds — no API key needed
 
 ```bash
-pip install agentkeeper
+pip install agentkeeper-ai
 python examples/demo.py
 ```
 
@@ -376,4 +376,4 @@ MIT. See [LICENSE](./LICENSE).
 
 [**ThinkLanceAI**](https://thinklanceai.com) — Tom Anciaux Berner — cognitive infrastructure for AI systems.
 
-`hello@thinklanceai.com`
+`tom@thinklanceai.com`
