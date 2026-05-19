@@ -24,3 +24,5 @@ venv/
 .idea/
 .vscode/
 .DS_Store
+README.md.backup-*
+pyproject.toml.backup-*
