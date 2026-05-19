@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .fact_types import FactType, is_valid_fact_type
@@ -101,6 +101,10 @@ class Fact:
         access_count: Number of times this fact has been retrieved.
         when: Optional event timestamp (only meaningful for `episodic`
               facts; the moment the event occurred, not when it was stored).
+        expires_at: Optional ISO-8601 UTC timestamp. When set, the fact
+                    is automatically purged by `agent.purge_expired()`
+                    or by the compression pipeline once the moment has
+                    passed. Critical for GDPR-compliant retention.
         metadata: Free-form dict for user extensions.
     """
 
@@ -115,6 +119,7 @@ class Fact:
     last_accessed_at: str = field(default_factory=_utcnow_iso)
     access_count: int = 0
     when: str | None = None
+    expires_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     # --- legacy compatibility ---------------------------------------
@@ -138,6 +143,8 @@ class Fact:
         metadata: dict[str, Any] | None = None,
         protected: bool = False,
         fact_type: FactType | str | None = None,
+        ttl: timedelta | str | int | float | None = None,
+        expires_at: str | datetime | None = None,
     ) -> Fact:
         """Build a Fact with smart defaults.
 
@@ -149,6 +156,8 @@ class Fact:
            fact exempt from all compression passes.
         5. If `fact_type` is omitted, default to `FactType.FACT` (the
            generic semantic statement). Legacy callers see no change.
+        6. If `ttl` is given, compute `expires_at` from now. Otherwise
+           use the explicit `expires_at` if provided.
         """
         resolved_tier = _normalise_tier(tier) or infer_tier(content)
 
@@ -174,6 +183,19 @@ class Fact:
         elif isinstance(when, str):
             when_iso = when
 
+        # Resolve expires_at: explicit datetime/string wins, otherwise
+        # compute from ttl, otherwise None.
+        expires_iso: str | None = None
+        if expires_at is not None:
+            if isinstance(expires_at, datetime):
+                expires_iso = expires_at.isoformat()
+            elif isinstance(expires_at, str):
+                expires_iso = expires_at
+        elif ttl is not None:
+            from ..retention.ttl import compute_expires_at
+
+            expires_iso = compute_expires_at(ttl)
+
         return Fact(
             id=str(uuid.uuid4()),
             content=content,
@@ -182,6 +204,7 @@ class Fact:
             importance=resolved_importance,
             protected=protected,
             when=when_iso,
+            expires_at=expires_iso,
             metadata=dict(metadata) if metadata else {},
         )
 
@@ -200,6 +223,7 @@ class Fact:
             "last_accessed_at": self.last_accessed_at,
             "access_count": self.access_count,
             "when": self.when,
+            "expires_at": self.expires_at,
             "metadata": dict(self.metadata),
             # legacy field, useful for v0.1 readers
             "critical": self.critical,
@@ -231,6 +255,7 @@ class Fact:
             last_accessed_at=data.get("last_accessed_at", _utcnow_iso()),
             access_count=int(data.get("access_count", 0)),
             when=data.get("when"),
+            expires_at=data.get("expires_at"),
             metadata=dict(data.get("metadata", {}) or {}),
         )
 
@@ -254,12 +279,25 @@ class CognitiveStateObject:
     identity: AgentIdentity = field(default_factory=AgentIdentity)
     created_at: str = field(default_factory=_utcnow_iso)
     updated_at: str = field(default_factory=_utcnow_iso)
+    # Memory policy is *not* persisted to disk — it's an in-process
+    # configuration, like the choice of embedding provider. Stored as
+    # `Any` to avoid a circular import.
+    memory_policy: Any = field(default=None, repr=False, compare=False)
 
     @staticmethod
     def create(agent_id: str | None = None) -> CognitiveStateObject:
         return CognitiveStateObject(agent_id=agent_id or str(uuid.uuid4()))
 
     # --- mutation ----------------------------------------------------
+
+    def set_memory_policy(self, policy: Any) -> None:
+        """Attach a `MemoryPolicy` that governs default TTLs.
+
+        Stored as `Any` here to avoid a circular import — the actual
+        type is `agentkeeper.retention.MemoryPolicy`.
+        """
+        self.memory_policy = policy
+        self.updated_at = _utcnow_iso()
 
     def add_fact(
         self,
@@ -271,8 +309,27 @@ class CognitiveStateObject:
         metadata: dict[str, Any] | None = None,
         protected: bool = False,
         fact_type: FactType | str | None = None,
+        ttl: timedelta | str | int | float | None = None,
+        expires_at: str | datetime | None = None,
     ) -> Fact:
-        """Add a fact. Backward compatible with the v0.1 signature."""
+        """Add a fact. Backward compatible with the v0.1 signature.
+
+        TTL resolution: explicit `ttl` > explicit `expires_at` >
+        memory policy default > no expiration.
+        """
+        # If no explicit TTL/expires given, consult the policy.
+        resolved_ttl = ttl
+        if resolved_ttl is None and expires_at is None:
+            policy = getattr(self, "memory_policy", None)
+            if policy is not None:
+                # Pre-resolve fact_type and tier the same way Fact.create will,
+                # so the policy sees what will actually be stored.
+                resolved_type = _normalise_fact_type(fact_type)
+                resolved_tier_obj = _normalise_tier(tier) or infer_tier(content)
+                resolved_ttl = policy.resolve(
+                    resolved_type, resolved_tier_obj, protected
+                )
+
         fact = Fact.create(
             content,
             critical=critical,
@@ -282,6 +339,8 @@ class CognitiveStateObject:
             metadata=metadata,
             protected=protected,
             fact_type=fact_type,
+            ttl=resolved_ttl,
+            expires_at=expires_at,
         )
         self.memory_facts.append(fact)
         self.updated_at = _utcnow_iso()

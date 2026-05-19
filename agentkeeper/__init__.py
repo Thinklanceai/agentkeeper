@@ -68,6 +68,7 @@ from .errors import (
     UnknownTierError,
 )
 from .logging import get_logger
+from .retention import MemoryPolicy, compute_expires_at, is_expired, parse_ttl
 from .semantic.base import EmbeddingProvider
 from .semantic.mock import MockEmbeddingProvider
 from .semantic.recaller import SemanticRecaller
@@ -319,11 +320,16 @@ class Agent:
         importance: float | None = None,
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
+        ttl: Any = None,
     ) -> Agent:
         """Add a fact to the agent's memory and return self for chaining.
 
         If `tier` and `importance` are omitted, AgentKeeper infers them
         from the content. Pass them explicitly to override.
+
+        Pass `ttl="30d"` (or `timedelta(days=30)`, or an ISO `"P30D"`)
+        to expire this fact automatically. Combined with a
+        `MemoryPolicy` it gives full GDPR-style retention control.
 
         After calling `remember`, the resolved fact is available via
         `agent.last_fact()`.
@@ -335,6 +341,7 @@ class Agent:
             importance=importance,
             when=when,
             metadata=metadata,
+            ttl=ttl,
         )
         return self
 
@@ -706,6 +713,110 @@ class Agent:
             },
         }
 
+    # --- retention + GDPR (AK-10) -----------------------------------
+
+    def set_memory_policy(self, policy: Any) -> Agent:
+        """Attach a `MemoryPolicy` to this agent.
+
+        Once set, every `remember`/`fact`/`decision`/... call that omits
+        an explicit `ttl` consults the policy. Protected facts are
+        exempt (the policy's `respect_protected` flag, default True).
+        """
+        self._cso.set_memory_policy(policy)
+        return self
+
+    def memory_policy(self) -> Any:
+        """Return the currently-attached `MemoryPolicy`, or None."""
+        return getattr(self._cso, "memory_policy", None)
+
+    def purge_expired(self) -> int:
+        """Remove facts whose `expires_at` is in the past.
+
+        Returns the number of facts purged. Protected facts are
+        always preserved. Also updates the semantic index if one is
+        attached.
+        """
+        from datetime import datetime, timezone
+
+        from .retention.ttl import is_expired
+
+        now = datetime.now(timezone.utc)
+        purged_ids: list[str] = []
+        kept: list[Fact] = []
+        for f in self._cso.memory_facts:
+            if f.protected:
+                kept.append(f)
+                continue
+            if f.expires_at and is_expired(f.expires_at, now=now):
+                purged_ids.append(f.id)
+                continue
+            kept.append(f)
+        if purged_ids:
+            self._cso.memory_facts = kept
+            if self._recaller is not None:
+                for fid in purged_ids:
+                    self._recaller.remove(fid)
+        return len(purged_ids)
+
+    def gdpr_export(self) -> dict[str, Any]:
+        """Return a JSON-serialisable export of every fact this agent
+        holds.
+
+        Useful for fulfilling GDPR Article 20 (right to data portability).
+        Includes the full Fact payload (content, type, tier, importance,
+        timestamps, metadata) plus the agent identity. Sensitive data
+        masking is the caller's responsibility — this method exports
+        whatever the agent stored verbatim.
+        """
+        identity = self._cso.identity
+        from datetime import datetime, timezone
+
+        return {
+            "schema_version": "1.1",
+            "agent_id": self._cso.agent_id,
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "identity": {
+                "name": identity.name,
+                "role": identity.role,
+                "principles": list(identity.principles),
+                "constraints": list(identity.constraints),
+            },
+            "facts": [f.to_dict() for f in self._cso.memory_facts],
+        }
+
+    def gdpr_purge(
+        self,
+        predicate: Any = None,
+        *,
+        include_protected: bool = False,
+    ) -> int:
+        """Bulk-delete facts matching `predicate`.
+
+        Useful for fulfilling GDPR Article 17 (right to erasure).
+        `predicate` is a callable `(Fact) -> bool`. If `None`, ALL
+        non-protected facts are purged — pass `include_protected=True`
+        to also purge identity-level facts.
+
+        Returns the number of facts removed.
+        """
+        purged_ids: list[str] = []
+        kept: list[Fact] = []
+        for f in self._cso.memory_facts:
+            should_purge = predicate(f) if predicate is not None else True
+            if f.protected and not include_protected:
+                kept.append(f)
+                continue
+            if should_purge:
+                purged_ids.append(f.id)
+                continue
+            kept.append(f)
+        if purged_ids:
+            self._cso.memory_facts = kept
+            if self._recaller is not None:
+                for fid in purged_ids:
+                    self._recaller.remove(fid)
+        return len(purged_ids)
+
     # --- internals ---------------------------------------------------
 
     def _get_adapter(self, provider: str) -> BaseAdapter:
@@ -801,6 +912,7 @@ __all__ = [
     "EmbeddingProvider",
     "Fact",
     "FactType",
+    "MemoryPolicy",
     "MemoryTier",
     "MockAdapter",
     "MockEmbeddingProvider",
@@ -812,15 +924,18 @@ __all__ = [
     "UnknownProviderError",
     "UnknownTierError",
     "__version__",
+    "compute_expires_at",
     "create",
     "create_async",
     "delete",
     "get_logger",
     "get_profile",
+    "is_expired",
     "known_providers",
     "list_agents",
     "load",
     "load_async",
     "make_llm_synthesiser",
+    "parse_ttl",
     "register_profile",
 ]

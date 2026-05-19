@@ -45,6 +45,7 @@ class CompressionReport:
 
     started_at: str = ""
     finished_at: str = ""
+    expired_purged: int = 0
     decayed_facts: int = 0
     consolidation: ConsolidationResult = field(default_factory=ConsolidationResult)
     contradictions: ContradictionResult = field(default_factory=ContradictionResult)
@@ -55,6 +56,7 @@ class CompressionReport:
         return {
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "expired_purged": self.expired_purged,
             "decayed_facts": self.decayed_facts,
             "consolidation": {
                 "clusters_found": self.consolidation.clusters_found,
@@ -74,6 +76,7 @@ class CompressionReport:
 class CompressionConfig:
     """Top-level toggle for each compression pass."""
 
+    run_expiration: bool = True
     run_decay: bool = True
     run_consolidation: bool = True
     run_contradiction: bool = True
@@ -95,6 +98,14 @@ def compress(
 ) -> CompressionReport:
     """Run the compression pipeline against an agent's CSO.
 
+    Order of passes:
+    1. **Expiration purge** — remove facts whose TTL has elapsed.
+       Runs first so subsequent passes don't waste cycles on
+       already-doomed facts.
+    2. **Decay** — non-critical facts lose importance with age.
+    3. **Consolidation** — near-duplicates merge.
+    4. **Contradiction arbitration** — divergent claims are resolved.
+
     Args:
         cso: The cognitive state to compress (mutated in place).
         embedding_provider: Required for semantic passes (consolidation,
@@ -108,6 +119,8 @@ def compress(
     Returns:
         A `CompressionReport` describing what changed.
     """
+    from ..retention.ttl import is_expired
+
     config = config or CompressionConfig()
     now = now or datetime.now(timezone.utc)
 
@@ -115,6 +128,24 @@ def compress(
         started_at=now.isoformat(),
         facts_before=len(cso.memory_facts),
     )
+
+    if config.run_expiration:
+        kept: list = []
+        purged = 0
+        for f in cso.memory_facts:
+            # Protected facts are never purged by expiration — defensive
+            # against a misconfigured policy. Use agent.gdpr_purge() to
+            # remove them explicitly.
+            if f.protected:
+                kept.append(f)
+                continue
+            if f.expires_at and is_expired(f.expires_at, now=now):
+                purged += 1
+                continue
+            kept.append(f)
+        if purged > 0:
+            cso.memory_facts = kept
+        report.expired_purged = purged
 
     if config.run_decay:
         report.decayed_facts = apply_decay_in_place(

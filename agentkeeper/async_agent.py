@@ -174,6 +174,7 @@ class AsyncAgent:
         importance: float | None = None,
         when: str | datetime | None = None,
         metadata: dict[str, Any] | None = None,
+        ttl: Any = None,
     ) -> AsyncAgent:
         self._last_fact = self._cso.add_fact(
             content,
@@ -182,6 +183,7 @@ class AsyncAgent:
             importance=importance,
             when=when,
             metadata=metadata,
+            ttl=ttl,
         )
         return self
 
@@ -395,6 +397,45 @@ class AsyncAgent:
         # implementation. We don't keep a reference — purely for the
         # method call.
         return Agent(self._cso, self._default_provider).health()
+
+    # --- retention + GDPR (AK-10) ----------------------------------
+
+    def set_memory_policy(self, policy: Any) -> AsyncAgent:
+        """Attach a `MemoryPolicy` to this agent."""
+        self._cso.set_memory_policy(policy)
+        return self
+
+    def memory_policy(self) -> Any:
+        """Return the currently-attached `MemoryPolicy`, or None."""
+        return getattr(self._cso, "memory_policy", None)
+
+    def purge_expired(self) -> int:
+        """Remove facts whose `expires_at` is in the past."""
+        from . import Agent
+
+        # Reuse the sync Agent logic; touches only local state.
+        agent = Agent(self._cso, self._default_provider)
+        agent._recaller = self._recaller  # share index so it stays in sync
+        return agent.purge_expired()
+
+    def gdpr_export(self) -> dict[str, Any]:
+        """Export every fact this agent holds, GDPR Article 20-style."""
+        from . import Agent
+
+        return Agent(self._cso, self._default_provider).gdpr_export()
+
+    def gdpr_purge(
+        self,
+        predicate: Any = None,
+        *,
+        include_protected: bool = False,
+    ) -> int:
+        """Bulk-delete facts matching `predicate`, GDPR Article 17-style."""
+        from . import Agent
+
+        agent = Agent(self._cso, self._default_provider)
+        agent._recaller = self._recaller
+        return agent.gdpr_purge(predicate, include_protected=include_protected)
 
     # --- internals -------------------------------------------------
 
