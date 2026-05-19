@@ -2,8 +2,7 @@
 
 **Cognitive continuity infrastructure for long-lived AI agents.**
 
-AgentKeeper reconstructs persistent cognitive state across model switches, crashes, restarts, and constrained contexts.
-Built for agents that must survive longer than a single context window.
+Your agent survives model switches, crashes, context-window limits, and restarts — with the same identity, memory, and priorities it had before.
 
 [![PyPI version](https://img.shields.io/pypi/v/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
 [![Python versions](https://img.shields.io/pypi/pyversions/agentkeeper.svg)](https://pypi.org/project/agentkeeper/)
@@ -13,23 +12,13 @@ Built for agents that must survive longer than a single context window.
 
 ---
 
-## Why AgentKeeper exists
+## Why this exists
 
-Agents don't fail because they forget facts.
-They fail because they lose **cognitive continuity** — their state, priorities, identity, and decision context drift the moment the underlying model changes, the context window fills, or the process restarts.
+Agents don't fail because they forget facts. They fail because they lose **cognitive continuity** — their state, priorities, and identity drift the moment the model changes, the context window fills, or the process restarts.
 
 AgentKeeper treats this as a systems problem, not a memory problem.
 
-It provides:
-
-- A **Cognitive Reconstruction Engine** that rebuilds an agent's state for the target model, every call.
-- A **memory hierarchy** (working / episodic / semantic / archival) with importance-aware retention.
-- **Semantic recall** based on embeddings — meaning, not keywords.
-- **Cognitive compression** — decay, consolidation, contradiction arbitration.
-- **Identity persistence** — principles and hard constraints that survive every form of compression.
-- **Cross-model translation** — XML for Claude, sections for GPT-4, narrative for Gemini, minimal for local models.
-
-Continuity, not just memory.
+---
 
 ## Install
 
@@ -37,24 +26,29 @@ Continuity, not just memory.
 pip install agentkeeper
 ```
 
-Optional extras (only install what you need):
+Zero required dependencies. No external infrastructure. Storage defaults to local SQLite.
 
 ```bash
-pip install 'agentkeeper[anthropic]'    # Claude
-pip install 'agentkeeper[openai]'       # GPT models + OpenAI embeddings
-pip install 'agentkeeper[gemini]'       # Google Gemini
-pip install 'agentkeeper[semantic]'     # Local embeddings (sentence-transformers)
-pip install 'agentkeeper[all]'          # everything
+pip install 'agentkeeper[anthropic]'   # Claude
+pip install 'agentkeeper[openai]'      # GPT + OpenAI embeddings
+pip install 'agentkeeper[gemini]'      # Gemini
+pip install 'agentkeeper[semantic]'    # Local embeddings (sentence-transformers)
+pip install 'agentkeeper[mcp]'         # MCP server (Claude Desktop, Cursor, Codex)
+pip install 'agentkeeper[encrypted]'   # Encrypted storage at rest
+pip install 'agentkeeper[all]'         # Everything
 ```
 
-No external infrastructure required. Storage defaults to local SQLite. Vendor-agnostic by design.
+---
 
-## 60-second tour
+## Five things AgentKeeper does that nothing else does
+
+### 1. Identity that survives everything
+
+Principles and constraints are **protected** — exempt from every compression pass, injected into every reconstructed context, regardless of token budget. They survive decay, consolidation, contradiction arbitration, model switches, and process restarts.
 
 ```python
 import agentkeeper
 
-# 1. Create an agent and define its persistent identity
 agent = agentkeeper.create(agent_id="aria", provider="anthropic")
 agent.set_identity(
     name="Aria",
@@ -62,81 +56,130 @@ agent.set_identity(
     principles=["never share PII without explicit consent"],
     constraints=["EU data residency only"],
 )
-
-# 2. Teach it about the world
 agent.principle("always confirm budget changes in writing")
 agent.fact("client: Acme Corporation", importance=0.95)
 agent.event("contract signed", when="2026-05-15")
-agent.remember("favourite colour: blue")  # tier inferred automatically
+agent.save()
 
-# 3. Ask — context is reconstructed for the target model
-response = agent.ask("What do we know about the Acme deal?")
+# 100 compression cycles later — identity intact.
+```
 
-# 4. Switch providers — memory and identity survive
+### 2. Same memory, switch models
+
+The cognitive state is reconstructed in the format each model expects. XML for Claude, labelled sections for GPT-4, narrative prose for Gemini, terse tokens for Ollama. One agent, four runtimes, zero rewrites.
+
+```python
+agent = agentkeeper.load("aria", provider="anthropic")
+response = agent.ask("What do we know about Acme?")
+
 agent.switch_provider("openai").save()
 response = agent.ask("Same question, different model.")
+# Memory and identity are intact. Format has changed. Nothing broke.
 ```
+
+### 3. TTL for GDPR — memory that expires itself
+
+Facts and graph triples accept a TTL. When it lapses, `purge_expired()` removes them. No manual cleanup. Compliant by default.
+
+```python
+agent.fact("session token: abc123", ttl="1h")
+agent.fact("audit log reference: Q1-2026", ttl="90d")
+agent.link("Acme", "signed_contract", "ThinkLanceAI", ttl="2y")
+
+agent.purge_expired()  # removes what's lapsed, keeps what's protected
+```
+
+### 4. Graph traversal — structured relations alongside prose memory
+
+Facts are prose. Triples are structure. Both live in the same agent, with their own retention and TTL policy.
+
+```python
+agent.link("Acme", "owns", "Globex")
+agent.link("Globex", "located_in", "BE")
+agent.link("Alice", "works_at", "Acme", confidence=0.9)
+
+related = agent.find_related("Acme", max_hops=2, direction="out")
+# {"Globex": 1, "BE": 2, "Alice": 1}
+```
+
+### 5. Plug into Claude Desktop via MCP
+
+AgentKeeper ships an MCP server. Any MCP-aware client — Claude Desktop, Cursor, Claude Code — gets full access to the agent's cognitive layer without writing a line of integration code.
+
+```bash
+agentkeeper-mcp --agent-id aria --provider anthropic
+```
+
+`claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "aria": {
+      "command": "agentkeeper-mcp",
+      "args": ["--agent-id", "aria", "--provider", "anthropic"]
+    }
+  }
+}
+```
+
+Available tools over MCP: `add_fact`, `recall`, `set_identity`, `link`, `find_related`, `compress`, `health`, `gdpr_export`, `purge_expired`.
+
+---
 
 ## Architecture
 
 ```
        ┌──────────────────────────────────────────────────────────────┐
        │                  AgentKeeper Public API                       │
-       │  agent.remember() · agent.recall() · agent.ask()              │
-       │  agent.compress() · agent.set_identity() · agent.save()       │
-       └────────────────────────────┬──────────────────────────────────┘
+       │  agent.remember() · agent.recall() · agent.ask()             │
+       │  agent.compress() · agent.link() · agent.find_related()      │
+       │  agent.set_identity() · agent.purge_expired() · agent.save() │
+       └────────────────────────────┬─────────────────────────────────┘
                                     │
-       ┌────────────────────────────▼──────────────────────────────────┐
-       │           Cognitive Reconstruction Engine (CRE)               │
-       │  Identity injection · importance ranking · semantic boost     │
-       │  Token budget · profile-driven rendering                      │
-       └─┬────────────┬────────────┬────────────┬─────────────────────┘
-         │            │            │            │
-   ┌─────▼─────┐ ┌───▼────────┐ ┌─▼─────────┐ ┌▼──────────────┐
-   │ Memory    │ │ Semantic   │ │ Cognitive │ │ Cross-Model    │
-   │ Hierarchy │ │ Recall     │ │ Compress  │ │ Translation    │
-   │           │ │            │ │           │ │                │
-   │ working   │ │ embeddings │ │ decay     │ │ XML / sections │
-   │ episodic  │ │ vector     │ │ consol.   │ │ narrative      │
-   │ semantic  │ │ index      │ │ contradic │ │ minimal        │
-   │ archival  │ │            │ │           │ │                │
-   └───────────┘ └────────────┘ └───────────┘ └────────────────┘
+       ┌────────────────────────────▼─────────────────────────────────┐
+       │           Cognitive Reconstruction Engine (CRE)              │
+       │  Identity injection · importance ranking · semantic boost    │
+       │  Token budget · profile-driven rendering                     │
+       └─┬───────────┬────────────┬────────────┬──────────────────────┘
+         │           │            │            │
+   ┌─────▼─────┐ ┌──▼─────────┐ ┌▼──────────┐ ┌▼──────────────┐
+   │ Memory    │ │ Semantic   │ │ Cognitive │ │ Cross-Model   │
+   │ Hierarchy │ │ Recall     │ │ Compress  │ │ Translation   │
+   │           │ │            │ │           │ │               │
+   │ working   │ │ embeddings │ │ decay     │ │ XML (Claude)  │
+   │ episodic  │ │ vector idx │ │ consol.   │ │ sections (GPT)│
+   │ semantic  │ │ sqlite-vec │ │ contradic │ │ narrative (G.)│
+   │ archival  │ │            │ │           │ │ minimal (Oll.)│
+   └───────────┘ └────────────┘ └───────────┘ └───────────────┘
+         │                                            │
+   ┌─────▼────────────────────────────────────────────▼────────────┐
+   │  Graph Layer             Storage (pluggable)                   │
+   │  Triple, TTL, BFS        SQLite · Encrypted SQLite · Postgres* │
+   │  agent.link()            AGENTKEEPER_DB, AGENTKEEPER_ENC_KEY   │
+   └───────────────────────────────────────────────────────────────┘
                                     │
-                      ┌─────────────▼─────────────┐
-                      │   Storage (SQLite-first)  │
-                      │   Vendor-agnostic         │
-                      └───────────────────────────┘
+              ┌─────────────────────▼───────────────────┐
+              │  MCP Server · LangChain · CrewAI         │
+              │  agentkeeper-mcp · langchain_system_prompt│
+              └──────────────────────────────────────────┘
 ```
 
-Every layer is **interchangeable** and **opt-in**. The base CRE works with no embeddings, no compression, no profile customisation. Layers stack as you need them.
+*Postgres stub available; full implementation in v1.2.
 
-## Cognitive continuity in five primitives
+---
 
-### 1. Identity that never erodes
+## Full API tour
+
+### Memory primitives
 
 ```python
-agent.set_identity(
-    name="Aria",
-    role="EU broker copilot",
-    principles=["never share PII"],
-    constraints=["EU data residency only"],
-)
+agent.fact("budget: 50k EUR", importance=0.9)          # stable semantic fact
+agent.event("contract signed", when="2026-05-15")      # episodic, time-anchored
+agent.principle("never share PII")                     # protected, survives all compression
+agent.remember("favourite colour: blue")               # tier inferred automatically
 ```
 
-Identity is injected into every reconstructed context, regardless of token budget. It survives compression, model switches, and restarts. Principles are **protected** — never decayed, never consolidated, never flagged.
-
-### 2. Memory organised by tier
-
-```python
-agent.fact("budget: 50k EUR")                      # semantic (stable)
-agent.event("contract signed", when="2026-05-15")  # episodic (time-anchored)
-agent.principle("always confirm changes")          # protected, identity-level
-agent.remember("favourite colour: blue")           # tier inferred automatically
-```
-
-Tiers shape narration in reconstructed prompts and drive retention policy under compression.
-
-### 3. Semantic recall
+### Semantic recall
 
 ```python
 results = agent.recall("money allocated to the project", top_k=5)
@@ -144,38 +187,92 @@ for fact, score in results:
     print(f"{score:.2f}  {fact.content}")
 ```
 
-Pluggable embedding providers: local `sentence-transformers` (default, free, no lock-in), OpenAI, or your own. Recall biases context reconstruction toward facts that actually matter for the current question.
+Pluggable backends: local `sentence-transformers` (default, free, offline), OpenAI, or your own. Persistent index via `sqlite-vec` — survives process restarts without rebuild.
 
-### 4. Cognitive compression
+### Cognitive compression
 
 ```python
 report = agent.compress()
 # CompressionReport(
 #   decayed_facts=12,
-#   consolidation={'clusters_found': 3, 'facts_removed': 7, ...},
+#   consolidation={'clusters_found': 3, 'facts_removed': 7},
 #   contradictions={'pairs_found': 2, 'resolutions': 2},
 #   facts_before=120, facts_after=102,
 # )
 ```
 
-Three independent passes:
+Three independent passes: **decay** (exponential half-life on unused facts), **consolidation** (embedding-based clustering, optional LLM synthesiser), **contradiction arbitration** (key-value divergence + polarity detection, deterministic winner). Protected facts are immortal.
 
-- **Decay** — exponential half-life on unused non-critical facts. Critical and protected facts are immortal.
-- **Consolidation** — embedding-based clustering merges near-duplicates. Optional LLM-backed synthesiser.
-- **Contradiction arbitration** — key-value divergence and polarity-opposition detection. Deterministic winner (critical > importance > recency). Loser is flagged, not deleted.
+### Graph relations
 
-### 5. Cross-model translation
+```python
+agent.link("Acme", "owns", "Globex", confidence=1.0)
+agent.link("Acme", "signed_contract", "ThinkLanceAI", ttl="2y")
 
-The same cognitive state, four formats:
+# BFS traversal
+related = agent.find_related("Acme", max_hops=2, direction="out")
 
-| Provider   | Format     | Why                                          |
-|------------|------------|-----------------------------------------------|
-| Anthropic  | XML        | Claude excels with structured `<agent_identity>` and `<memory>` blocks |
-| OpenAI     | Sections   | GPT family responds well to labelled sections (`AGENT IDENTITY`, `MEMORY`, `CURRENT TASK`) |
-| Gemini     | Narrative  | Long-context model — prefers prose framing |
-| Ollama     | Minimal    | Small/local models — aggressive compression, terse tokens |
+# Introspect triples
+for triple in agent.triples:
+    print(triple)  # Triple('Acme' -[owns]-> 'Globex', conf=1.00)
+```
 
-Custom providers? Register your own:
+### TTL on facts and triples
+
+```python
+agent.fact("session token: abc123", ttl="1h")
+agent.fact("temp context: negotiation", ttl="30d")
+agent.link("Project Phoenix", "uses_provider", "Anthropic", ttl="P90D")
+
+agent.purge_expired()  # returns count of removed items
+```
+
+### Encrypted storage
+
+```python
+from agentkeeper.storage.encrypted_sqlite import EncryptedSQLiteStorage
+
+key = EncryptedSQLiteStorage.generate_key()
+storage = EncryptedSQLiteStorage(encryption_key=key)
+# or via env: AGENTKEEPER_ENCRYPTION_KEY=...
+```
+
+AES-128-CBC + HMAC-SHA256 at rest. Progressive migration — plain SQLite rows are upgraded on next save.
+
+### Async API
+
+```python
+import asyncio, agentkeeper
+
+async def main():
+    agent = agentkeeper.create_async(agent_id="aria", provider="anthropic")
+    agent.set_identity(name="Aria", role="copilot")
+    agent.fact("budget: 50k EUR", importance=0.95)
+
+    answers = await asyncio.gather(
+        agent.ask("status?", provider="anthropic"),
+        agent.ask("status?", provider="openai"),
+    )
+
+asyncio.run(main())
+```
+
+Sync and async agents share the same storage. Save with one, load with the other.
+
+### LangChain integration
+
+```python
+from agentkeeper.integrations.langchain import LangChainCognitiveProvider
+from langchain_core.prompts import ChatPromptTemplate
+
+provider = LangChainCognitiveProvider(agent, model="gpt-4o")
+prompt = ChatPromptTemplate.from_messages([
+    ("system", provider(message="What's our budget?")),
+    ("human", "{input}"),
+])
+```
+
+### Custom provider profile
 
 ```python
 from agentkeeper import CognitiveProfile, PromptFormat, register_profile
@@ -187,81 +284,96 @@ register_profile(CognitiveProfile(
 ))
 ```
 
-## Async API
+---
+
+## GDPR / compliance
 
 ```python
-import asyncio
-import agentkeeper
-
-async def main() -> None:
-    agent = agentkeeper.create_async(agent_id="aria", provider="anthropic")
-    agent.set_identity(name="Aria", role="copilot")
-    agent.fact("budget: 50k", importance=0.95)
-
-    # Parallel asks across providers
-    answers = await asyncio.gather(
-        agent.ask("status?", provider="anthropic"),
-        agent.ask("status?", provider="openai"),
-    )
-
-asyncio.run(main())
+export = agent.gdpr_export()   # all facts, triples, identity — JSON-serialisable
+agent.purge_expired()          # remove anything whose TTL has elapsed
+agent.forget(fact_id)          # remove a single fact by id
+agentkeeper.delete("aria")     # permanently remove an agent from storage
 ```
 
-Sync and async agents share storage — you can save with one and load with the other.
+---
 
-## Production-grade
+## Observability
 
-- **Type-safe**: `py.typed` marker shipped, mypy-strict friendly.
-- **Typed exceptions**: `AgentKeeperError` root, with subclasses for every failure mode (provider down, agent missing, retriable network errors).
-- **Structured logging**: namespaced under `agentkeeper.*`, opt-in.
-- **Retries**: built-in exponential backoff for transient provider errors via `with_retry` / `with_async_retry`.
-- **Tested**: 267 tests, CI on Python 3.10 / 3.11 / 3.12.
+```python
+snapshot = agent.health()
+# {
+#   "total_facts": 42,
+#   "critical_facts": 3,
+#   "protected_facts": 5,
+#   "contradicted_facts": 1,
+#   "stale_facts": 4,
+#   "importance_stats": {"mean": 0.71, "min": 0.10, "max": 0.95},
+#   "tier_distribution": {"semantic": 28, "episodic": 10, ...},
+#   "graph": {"total_triples": 8, "protected_triples": 2},
+#   "identity": {"name": "Aria", "principles_count": 3, ...}
+# }
+```
+
+---
+
+## Production checklist
+
+- **Type-safe** — `py.typed` shipped, mypy-strict compatible.
+- **Typed exceptions** — `AgentKeeperError` root, subclasses for every failure mode.
+- **Structured logging** — namespaced under `agentkeeper.*`, opt-in, `NullHandler` default.
+- **Retries** — exponential backoff + jitter via `with_retry` / `with_async_retry`.
+- **Tested** — 459 tests, CI on Python 3.10 / 3.11 / 3.12.
+- **Zero breaking changes from v0.1** — `agent.remember(content, critical=True)` still works.
+
+---
 
 ## Configuration
 
-Environment variables (all optional):
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | — | OpenAI provider |
+| `ANTHROPIC_API_KEY` | — | Anthropic provider |
+| `GEMINI_API_KEY` | — | Gemini provider |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server |
+| `AGENTKEEPER_DB` | `agentkeeper.db` | SQLite path |
+| `AGENTKEEPER_ENCRYPTION_KEY` | — | Fernet key for encrypted storage |
+| `AGENTKEEPER_EMBEDDING_PROVIDER` | auto | `sentence-transformers` › `openai` › `mock` |
 
-| Variable                          | Default                          | Purpose |
-|-----------------------------------|----------------------------------|---------|
-| `OPENAI_API_KEY`                  | —                                | Required for OpenAI provider |
-| `ANTHROPIC_API_KEY`               | —                                | Required for Anthropic provider |
-| `GEMINI_API_KEY`                  | —                                | Required for Gemini provider |
-| `OPENAI_MODEL`                    | `gpt-4-turbo`                    | OpenAI model name |
-| `ANTHROPIC_MODEL`                 | `claude-sonnet-4-5-20250929`     | Anthropic model name |
-| `OLLAMA_HOST`                     | `http://localhost:11434`         | Ollama server URL |
-| `AGENTKEEPER_DB`                  | `agentkeeper.db`                 | SQLite path |
-| `AGENTKEEPER_EMBEDDING_PROVIDER`  | auto (sentence-transformers > openai > mock) | Override embedding backend |
+---
 
-## Roadmap (v1.x)
+## Try it in 30 seconds — no API key needed
 
-- **v1.1** — Persistent vector index (`sqlite-vec`) so the recaller survives restarts without rebuild.
-- **v1.2** — Async LLM-backed synthesiser in compression.
-- **v1.3** — Pluggable storage backends (Postgres, encrypted).
-- **v1.4** — `AgentKeeper Cloud` (managed sync). *Stays optional; OSS remains feature-complete.*
+```bash
+pip install agentkeeper
+python examples/demo.py
+```
 
-## Featured on
+The demo runs entirely on `provider="mock"` and `AGENTKEEPER_EMBEDDING_PROVIDER=mock`. No keys. No network. Shows identity hardening, compression, cross-model translation, and async — in one file.
 
-AgentKeeper was vouched for in March 2026 by:
+---
 
-- Shruti Codes ✓
-- Chidanand Tripathi ✓ ([80K-view thread](#))
-- Kayvon Jafarzadeh ✓
-- Leonard Rodman ✓
-- Martin Szerment ✓
-- Bespoke AI Solutions Inc ✓
-- @grok (xAI)
+## Roadmap
 
-If you've shipped agents that needed to survive across model changes, you understand why this matters. Thank you to everyone who saw the project early.
+- **v1.1** ✅ — TTL, graph layer, encrypted storage, MCP server, LangChain + CrewAI integrations, persistent `sqlite-vec` index, GDPR export, health snapshot, 459 tests.
+- **v1.2** — Postgres backend (full), async LLM synthesiser.
+- **v1.3** — AgentKeeper Cloud (managed sync). OSS stays feature-complete.
+
+---
 
 ## Contributing
 
 Issues, ideas, and PRs welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+---
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
 
+---
+
 ## Built by
 
-[**ThinkLanceAI**](https://thinklanceai.com) — cognitive infrastructure for AI systems.
-Need this in production with custom integrations? `hello@thinklanceai.com`.
+[**ThinkLanceAI**](https://thinklanceai.com) — Tom Anciaux Berner — cognitive infrastructure for AI systems.
+
+`hello@thinklanceai.com`
