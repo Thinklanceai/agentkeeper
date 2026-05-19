@@ -34,7 +34,7 @@ Continuity, not just memory.
 ## Install
 
 ```bash
-pip install agentkeeper
+pip install agentkeeper-ai
 ```
 
 Optional extras (only install what you need):

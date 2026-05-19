@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentkeeper"
-version = "1.1.0.dev0"
+name = "agentkeeper-ai"
+version = "1.1.0"
 description = "Cognitive continuity infrastructure for long-lived AI agents — cross-model state reconstruction, semantic recall, cognitive compression"
 readme = "README.md"
 license = { text = "MIT" }
