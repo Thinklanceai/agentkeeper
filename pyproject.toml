@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [
-    { name = "Tom", email = "hello@thinklanceai.com" },
+    { name = "Tom Anciaux Berner", email = "tom@thinklanceai.com" },
 ]
 keywords = [
     "ai",
