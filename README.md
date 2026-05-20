@@ -355,7 +355,7 @@ The demo runs entirely on `provider="mock"` and `AGENTKEEPER_EMBEDDING_PROVIDER=
 ## Roadmap
 
 - **v1.1** ✅ — TTL, graph layer, encrypted storage, MCP server, LangChain + CrewAI integrations, persistent `sqlite-vec` index, GDPR export, health snapshot, 459 tests.
-- **v1.2** — Postgres backend (full), async LLM synthesiser.
+- **v1.2** — Postgres storage backend (full implementation), TypeScript SDK.
 - **v1.3** — AgentKeeper Cloud (managed sync). OSS stays feature-complete.
 
 ---
