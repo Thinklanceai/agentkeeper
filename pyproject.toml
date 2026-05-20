@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentkeeper-ai"
-version = "1.1.1"
+version = "1.1.2"
 description = "Cognitive continuity infrastructure for long-lived AI agents — cross-model state reconstruction, semantic recall, cognitive compression"
 readme = "README.md"
 license = { text = "MIT" }
@@ -50,6 +50,7 @@ semantic = ["sentence-transformers>=3.0.0"]
 vec = ["sqlite-vec>=0.1.6"]
 encrypted = ["cryptography>=42.0.0"]
 mcp = ["fastmcp>=3.0.0"]
+fast = ["numpy>=1.24.0"]
 all = [
     "openai>=1.30.0",
     "anthropic>=0.30.0",
@@ -59,6 +60,7 @@ all = [
     "sqlite-vec>=0.1.6",
     "cryptography>=42.0.0",
     "fastmcp>=3.0.0",
+    "numpy>=1.24.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -69,6 +71,7 @@ dev = [
     "sqlite-vec>=0.1.6",
     "cryptography>=42.0.0",
     "fastmcp>=3.0.0",
+    "numpy>=1.24.0",
 ]
 
 [project.scripts]

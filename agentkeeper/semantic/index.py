@@ -19,13 +19,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-
-def _dot(a: Sequence[float], b: Sequence[float]) -> float:
-    if len(a) != len(b):
-        raise ValueError(
-            f"Vector dimension mismatch: {len(a)} vs {len(b)}"
-        )
-    return sum(x * y for x, y in zip(a, b, strict=True))
+from .._fastmath import batch_dot
+from .._fastmath import dot as _dot  # noqa: F401  (re-exported for compression.contradiction)
 
 
 class VectorIndex(ABC):
@@ -86,11 +81,14 @@ class InMemoryVectorIndex(VectorIndex):
     ) -> list[tuple[str, float]]:
         if top_k <= 0 or not self._vectors:
             return []
-        scored: list[tuple[str, float]] = []
-        for fact_id, vec in self._vectors.items():
-            score = _dot(query, vec)
-            if score >= min_score:
-                scored.append((fact_id, score))
+        fact_ids = list(self._vectors.keys())
+        matrix = [self._vectors[fid] for fid in fact_ids]
+        scores = batch_dot(query, matrix)
+        scored = [
+            (fid, score)
+            for fid, score in zip(fact_ids, scores, strict=True)
+            if score >= min_score
+        ]
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 

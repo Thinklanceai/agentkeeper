@@ -161,15 +161,48 @@ def detect_and_resolve(
     # cascading.
     already_lost: set[str] = set()
 
+    # Vectorised prefilter: contradictions only occur between highly
+    # similar facts (similarity >= threshold). For each row i we compute
+    # similarities against all j > i in one batched dot product, then
+    # only run the (cheaper but still non-trivial) contradiction check on
+    # candidate pairs that clear the threshold. We compute per-row rather
+    # than materialising the full n*n matrix, to bound memory at large n
+    # (a 10k*10k float matrix would be ~800MB).
+    from .._fastmath import HAS_NUMPY
+
+    mat = None
+    if HAS_NUMPY and n > 1:
+        import numpy as _np
+
+        mat = _np.asarray(vectors, dtype=float)
+
     for i in range(n):
         if targets[i].id in already_lost:
             continue
-        for j in range(i + 1, n):
+        if mat is not None:
+            # Similarities of row i against every other row, vectorised.
+            row = (mat @ mat[i])
+            candidates = [
+                j
+                for j in range(i + 1, n)
+                if row[j] >= config.similarity_threshold
+            ]
+            row_scores = row
+        else:
+            candidates = [
+                j
+                for j in range(i + 1, n)
+                if _dot(vectors[i], vectors[j]) >= config.similarity_threshold
+            ]
+            row_scores = None
+        for j in candidates:
             if targets[j].id in already_lost:
                 continue
-            similarity = _dot(vectors[i], vectors[j])
-            if similarity < config.similarity_threshold:
-                continue
+            similarity = (
+                float(row_scores[j])
+                if row_scores is not None
+                else _dot(vectors[i], vectors[j])
+            )
             reason = _detect_contradiction(targets[i], targets[j], similarity)
             if reason is None:
                 continue

@@ -3,6 +3,31 @@
 All notable changes to AgentKeeper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] — 2026-05-20
+
+Performance release. No public API changes.
+
+### Changed
+
+- **Compression is dramatically faster at scale.** An optional numpy
+  accelerator (`agentkeeper._fastmath`) vectorises the dot products and
+  cluster-centroid math used by consolidation and contradiction
+  arbitration. With numpy installed, a full compression pass over an
+  agent holding 10,000 facts drops from ~118s to ~5s (about 23x). Without
+  numpy, behaviour is unchanged — the pure-Python fallback is preserved,
+  so the core retains zero required dependencies.
+- Install the accelerator with the new extra: `pip install
+  'agentkeeper-ai[fast]'` (also included in `[all]`).
+- Consolidation clustering now assigns each fact to the **best** matching
+  centroid above the similarity threshold rather than the first one
+  encountered. Tighter, more stable clusters; output on typical inputs is
+  equal or better.
+
+### Added
+
+- `benchmark/stress_test.py` — reproducible scaling benchmark.
+- `tests/test_fastmath.py` — verifies the numpy and pure-Python paths agree.
+
 ## [1.1.0] — 2026-05-19
 
 ### Added

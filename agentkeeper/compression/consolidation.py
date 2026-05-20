@@ -26,9 +26,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from .._fastmath import batch_dot
 from ..cso.types import Fact
 from ..semantic.base import EmbeddingProvider
-from ..semantic.index import _dot
 
 
 @dataclass
@@ -97,25 +97,75 @@ def consolidate(
         f.id: vec for f, vec in zip(targets, vectors, strict=True)
     }
 
-    # Greedy clustering: walk facts, group each into the first cluster
+    # Greedy clustering: walk facts, group each into the best cluster
     # whose centroid is within the threshold; else start a new cluster.
-    clusters: list[list[Fact]] = []
-    centroids: list[list[float]] = []
+    # When numpy is present we keep the centroid matrix as a live ndarray
+    # and append rows in place, so we never re-coerce a growing python
+    # list to an array on every fact (that reconversion was the dominant
+    # cost at scale). Centroids use an incremental running sum / count.
+    from .._fastmath import HAS_NUMPY
 
-    for fact in targets:
-        vec = fact_vectors[fact.id]
-        assigned = False
-        for i, centroid in enumerate(centroids):
-            if _dot(vec, centroid) >= config.similarity_threshold:
-                clusters[i].append(fact)
-                # update centroid as running mean (re-normalise lazily)
-                cluster_vecs = [fact_vectors[m.id] for m in clusters[i]]
-                centroids[i] = _mean_vector(cluster_vecs)
-                assigned = True
-                break
-        if not assigned:
-            clusters.append([fact])
-            centroids.append(vec)
+    clusters: list[list[Fact]] = []
+    centroid_sums: list[list[float]] = []
+    centroid_counts: list[int] = []
+
+    if HAS_NUMPY:
+        import numpy as _np
+
+        dim = len(fact_vectors[targets[0].id])
+        # Pre-allocate; grow geometrically to amortise reallocation.
+        cap = 64
+        cmat = _np.empty((cap, dim), dtype=float)
+        n_centroids = 0
+
+        for fact in targets:
+            vec = fact_vectors[fact.id]
+            varr = _np.asarray(vec, dtype=float)
+            assigned = False
+            if n_centroids > 0:
+                scores = cmat[:n_centroids] @ varr
+                best_i = int(scores.argmax())
+                if scores[best_i] >= config.similarity_threshold:
+                    clusters[best_i].append(fact)
+                    csum = centroid_sums[best_i]
+                    for k in range(dim):
+                        csum[k] += vec[k]
+                    centroid_counts[best_i] += 1
+                    cnt = centroid_counts[best_i]
+                    cmat[best_i] = [s / cnt for s in csum]
+                    assigned = True
+            if not assigned:
+                if n_centroids >= cap:
+                    cap *= 2
+                    newmat = _np.empty((cap, dim), dtype=float)
+                    newmat[:n_centroids] = cmat[:n_centroids]
+                    cmat = newmat
+                cmat[n_centroids] = varr
+                n_centroids += 1
+                clusters.append([fact])
+                centroid_sums.append(list(vec))
+                centroid_counts.append(1)
+    else:
+        centroids: list[list[float]] = []
+        for fact in targets:
+            vec = fact_vectors[fact.id]
+            assigned = False
+            for i, centroid in enumerate(centroids):
+                if batch_dot(vec, [centroid])[0] >= config.similarity_threshold:
+                    clusters[i].append(fact)
+                    csum = centroid_sums[i]
+                    for k in range(len(csum)):
+                        csum[k] += vec[k]
+                    centroid_counts[i] += 1
+                    cnt = centroid_counts[i]
+                    centroids[i] = [s / cnt for s in csum]
+                    assigned = True
+                    break
+            if not assigned:
+                clusters.append([fact])
+                centroids.append(list(vec))
+                centroid_sums.append(list(vec))
+                centroid_counts.append(1)
 
     # Process non-singleton clusters
     for cluster in clusters:
