@@ -121,3 +121,11 @@ strict = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 ignore_missing_imports = true
+
+# fastmcp ships no type stubs: @mcp.tool is an untyped decorator and
+# calls through the resulting objects return Any. Disable only those
+# two rules, only for this module; all other strict checks still apply.
+[[tool.mypy.overrides]]
+module = "agentkeeper.mcp.server"
+disallow_untyped_decorators = false
+warn_return_any = false
