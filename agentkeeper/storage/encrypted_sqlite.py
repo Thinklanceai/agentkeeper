@@ -31,10 +31,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..cso.types import CognitiveStateObject
 from ..errors import ConfigurationError
 from .sqlite_store import SQLiteStorage
+
+if TYPE_CHECKING:
+    from cryptography.fernet import Fernet
 
 # Magic prefix every Fernet token starts with after base64 decoding
 # (version byte 0x80). The encrypted *string* therefore starts with
@@ -43,10 +47,10 @@ from .sqlite_store import SQLiteStorage
 _FERNET_PREFIX = "gAAAAA"
 
 
-def _require_cryptography() -> object:
+def _require_cryptography() -> type[Fernet]:
     """Import `cryptography.fernet.Fernet` lazily with a helpful error."""
     try:
-        from cryptography.fernet import Fernet  # type: ignore[import-not-found]
+        from cryptography.fernet import Fernet
     except ImportError as exc:  # pragma: no cover - exercised only when missing
         raise ConfigurationError(
             "EncryptedSQLiteStorage requires the 'cryptography' package. "
@@ -74,7 +78,9 @@ class EncryptedSQLiteStorage(SQLiteStorage):
     ) -> None:
         fernet_cls = _require_cryptography()
 
-        key = encryption_key or os.getenv("AGENTKEEPER_ENCRYPTION_KEY")
+        key: str | bytes | None = encryption_key or os.getenv(
+            "AGENTKEEPER_ENCRYPTION_KEY"
+        )
         if not key:
             raise ConfigurationError(
                 "EncryptedSQLiteStorage requires an encryption key. "
@@ -84,7 +90,7 @@ class EncryptedSQLiteStorage(SQLiteStorage):
             key = key.encode("utf-8")
 
         try:
-            self._fernet = fernet_cls(key)  # type: ignore[operator]
+            self._fernet: Fernet = fernet_cls(key)
         except Exception as exc:
             raise ConfigurationError(
                 "Invalid Fernet encryption key. Generate a valid one with:\n"
@@ -99,7 +105,7 @@ class EncryptedSQLiteStorage(SQLiteStorage):
 
     def _encode_payload(self, cso: CognitiveStateObject) -> str:
         plaintext = json.dumps(cso.to_dict()).encode("utf-8")
-        return self._fernet.encrypt(plaintext).decode("utf-8")  # type: ignore[union-attr]
+        return self._fernet.encrypt(plaintext).decode("utf-8")
 
     def _decode_payload(self, payload: str) -> CognitiveStateObject:
         # Detect legacy plain-JSON rows so a deployment can migrate
@@ -107,7 +113,7 @@ class EncryptedSQLiteStorage(SQLiteStorage):
         if not payload.startswith(_FERNET_PREFIX):
             return CognitiveStateObject.from_dict(json.loads(payload))
         try:
-            plaintext = self._fernet.decrypt(payload.encode("utf-8"))  # type: ignore[union-attr]
+            plaintext = self._fernet.decrypt(payload.encode("utf-8"))
         except Exception as exc:
             raise ConfigurationError(
                 "Failed to decrypt agent payload. Either the encryption "
@@ -126,4 +132,4 @@ class EncryptedSQLiteStorage(SQLiteStorage):
         stored in AGENTKEEPER_ENCRYPTION_KEY.
         """
         fernet_cls = _require_cryptography()
-        return fernet_cls.generate_key().decode("utf-8")  # type: ignore[attr-defined]
+        return fernet_cls.generate_key().decode("utf-8")
