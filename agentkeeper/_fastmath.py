@@ -14,6 +14,7 @@ the fast path when possible. Callers never import numpy directly.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 try:
     import numpy as _np
@@ -47,7 +48,7 @@ def batch_dot(
     if HAS_NUMPY:
         m = _np.asarray(matrix, dtype=float)
         q = _np.asarray(query, dtype=float)
-        return _np.dot(m, q).tolist()
+        return cast("list[float]", _np.dot(m, q).tolist())
     return [dot(query, row) for row in matrix]
 
 
@@ -56,7 +57,10 @@ def mean_vector(vectors: Sequence[Sequence[float]]) -> list[float]:
     if not vectors:
         return []
     if HAS_NUMPY:
-        return _np.asarray(vectors, dtype=float).mean(axis=0).tolist()
+        return cast(
+            "list[float]",
+            _np.asarray(vectors, dtype=float).mean(axis=0).tolist(),
+        )
     n = len(vectors)
     dim = len(vectors[0])
     acc = [0.0] * dim

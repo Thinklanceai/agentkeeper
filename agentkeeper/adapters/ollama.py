@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from typing import Any
 
 from .base import BaseAdapter
 
@@ -43,5 +44,10 @@ class OllamaAdapter(BaseAdapter):
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            body = json.loads(resp.read())
-            return body.get("message", {}).get("content", "")
+            body: dict[str, Any] = json.loads(resp.read())
+
+        message = body.get("message")
+        if not isinstance(message, dict):
+            return ""
+        content = message.get("content", "")
+        return content if isinstance(content, str) else str(content)
