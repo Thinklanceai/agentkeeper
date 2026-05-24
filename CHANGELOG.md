@@ -3,6 +3,35 @@
 All notable changes to AgentKeeper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] — 2026-05-24
+
+Feature release. Adds cognitive checkpoints. No breaking changes.
+
+### Added
+
+- **Cognitive checkpoints — snapshot, restore, survive a crash.**
+  `agent.checkpoint(label=..., execution_state=...)` freezes the full
+  cognitive state into an immutable, content-hashed snapshot;
+  `agent.restore(snapshot_id)` rebuilds it after a crash, context-window
+  overflow, model switch, or process restart. Reconstruction is
+  deterministic (verified by content hash); the optional
+  `execution_state` payload is stored and returned verbatim and is never
+  interpreted or executed.
+- `agentkeeper.diff(snap_a, snap_b)` — factual diff between two
+  snapshots (facts added/removed/modified, triples, identity changes).
+- `agent.list_checkpoints()` and `agentkeeper.load_checkpoint(...)` for
+  enumeration and read-only access. Snapshots live in a flat-file store
+  (`AGENTKEEPER_CHECKPOINT_DIR`, default `~/.agentkeeper/checkpoints`),
+  independent of the storage backend.
+- MCP server exposes `checkpoint`, `restore`, and `list_checkpoints`
+  tools alongside the existing ones.
+- New example: `examples/crash_recovery.py` — a two-process crash
+  recovery demo that runs with no API key.
+
+### Changed
+
+- The package is now clean under `mypy --strict` across all modules.
+
 ## [1.1.2] — 2026-05-20
 
 Performance release. No public API changes.

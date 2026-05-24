@@ -94,7 +94,7 @@ from .translation.profiles import (
     register_profile,
 )
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 _log = get_logger(__name__)
 
