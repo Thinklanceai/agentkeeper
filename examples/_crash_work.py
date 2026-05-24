@@ -18,6 +18,9 @@ GREEN = "\033[32m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
+# Step delay. Default fast; set CRASH_DEMO_DELAY=1.0 for screen captures.
+_DELAY = float(os.environ.get("CRASH_DEMO_DELAY", "0.2"))
+
 
 def main() -> None:
     agent = agentkeeper.create(agent_id="dev-agent", provider="mock")
@@ -34,11 +37,11 @@ def main() -> None:
     print(f"{DIM}  t+0.0s  agent booted, identity set{RESET}")
     agent.fact("repo: thinklanceai/auth-service", importance=0.8)
     agent.fact("goal: migrate JWT middleware to RS256", importance=0.95)
-    time.sleep(0.2)
+    time.sleep(_DELAY)
     print(f"{DIM}  t+0.2s  analysed codebase, opened auth/middleware.py{RESET}")
     agent.fact("decision: rotate signing keys via JWKS endpoint", importance=0.9)
     agent.event("started editing auth/middleware.py", when="2026-05-24")
-    time.sleep(0.2)
+    time.sleep(_DELAY)
     print(f"{DIM}  t+0.4s  wrote 1st half of the migration{RESET}")
 
     execution_state = {
@@ -69,6 +72,7 @@ def main() -> None:
         f"facts={snap.meta.fact_count}  exec_state=yes{RESET}"
     )
     print(f"{DIM}  t+0.6s  … still working when the process is killed …{RESET}")
+    time.sleep(_DELAY * 2)
 
     # Hard kill: no atexit, no flush, no graceful save. Whatever wasn't
     # already on disk is lost forever.
