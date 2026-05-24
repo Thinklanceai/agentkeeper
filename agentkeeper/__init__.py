@@ -42,7 +42,10 @@ from .checkpoint.diff import SnapshotDiff  # noqa: E402,F401
 
 import os
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .graph.relation_graph import RelationGraph
 
 from .adapters.base import BaseAdapter, MockAdapter
 from .async_agent import AsyncAgent, create_async, load_async
@@ -215,6 +218,8 @@ class Agent:
     a fluent, side-effect-light API for identity, memory, asking,
     switching providers, and persisting state.
     """
+
+    _graph: RelationGraph | None = None
 
     def __init__(
         self,
@@ -568,7 +573,7 @@ class Agent:
         return removed
 
     @property
-    def graph(self) -> Any:
+    def graph(self) -> RelationGraph:
         """Return a `RelationGraph` view over this agent's triples.
 
         The graph is constructed once per agent and re-uses cached

@@ -15,7 +15,10 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .graph.relation_graph import RelationGraph
 
 from .adapters.base import AsyncBaseAdapter, AsyncMockAdapter
 from .compression.llm_synth import make_llm_synthesiser
@@ -95,6 +98,8 @@ class AsyncAgent:
     those operations are local. I/O-bound methods (`ask`, `recall`,
     `compress`) are async-native.
     """
+
+    _graph: RelationGraph | None = None
 
     def __init__(
         self,
@@ -330,7 +335,7 @@ class AsyncAgent:
         return removed
 
     @property
-    def graph(self) -> Any:
+    def graph(self) -> RelationGraph:
         """Return a `RelationGraph` view over this agent's triples."""
         from .graph.relation_graph import RelationGraph
 
