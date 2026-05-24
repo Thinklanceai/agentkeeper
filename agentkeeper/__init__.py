@@ -37,6 +37,9 @@ ANTHROPIC_API_KEY, GEMINI_API_KEY) or a running Ollama instance.
 
 from __future__ import annotations
 
+from .checkpoint import CheckpointError, Snapshot, SnapshotMeta  # noqa: E402,F401
+from .checkpoint.diff import SnapshotDiff  # noqa: E402,F401
+
 import os
 from datetime import datetime
 from typing import Any
@@ -737,6 +740,45 @@ class Agent:
         _get_storage().save(self._cso)
         return self
 
+    # --- checkpoints -------------------------------------------------
+
+    def checkpoint(
+        self,
+        label: str | None = None,
+        execution_state: dict[str, Any] | None = None,
+    ) -> "Snapshot":
+        """Freeze the current cognitive state into an immutable snapshot.
+
+        The optional ``execution_state`` is an opaque, JSON-serialisable
+        blob (e.g. current file, pending task, open todos). AgentKeeper
+        stores and returns it verbatim; it is never interpreted or run.
+        """
+        from .checkpoint import CheckpointStore, build_snapshot
+
+        snapshot = build_snapshot(
+            self._cso, label=label, execution_state=execution_state
+        )
+        return CheckpointStore().save(snapshot)
+
+    def restore(self, snapshot_id: str) -> "Agent":
+        """Restore cognitive state from a checkpoint, in memory.
+
+        Replaces the in-memory CSO. Does not persist automatically:
+        call ``.save()`` afterwards to commit the restored state.
+        """
+        from .checkpoint import CheckpointStore
+        from .cso.types import CognitiveStateObject
+
+        snapshot = CheckpointStore().load(self._cso.agent_id, snapshot_id)
+        self._cso = CognitiveStateObject.from_dict(snapshot.cognitive_state)
+        return self
+
+    def list_checkpoints(self) -> "list[SnapshotMeta]":
+        """List checkpoints for this agent, oldest first."""
+        from .checkpoint import CheckpointStore
+
+        return CheckpointStore().list(self._cso.agent_id)
+
     # --- diagnostics -------------------------------------------------
 
     def stats(
@@ -1027,6 +1069,27 @@ def create(
     )
 
 
+def load_checkpoint(agent_id: str, snapshot_id: str) -> "Snapshot":
+    """Load a single checkpoint (read-only) without touching the agent."""
+    from .checkpoint import CheckpointStore
+
+    return CheckpointStore().load(agent_id, snapshot_id)
+
+
+def list_checkpoints(agent_id: str) -> "list[SnapshotMeta]":
+    """List checkpoints for an agent id, oldest first."""
+    from .checkpoint import CheckpointStore
+
+    return CheckpointStore().list(agent_id)
+
+
+def diff(snapshot_a: "Snapshot", snapshot_b: "Snapshot") -> "SnapshotDiff":
+    """Factual diff between two snapshots (a = from, b = to)."""
+    from .checkpoint.diff import diff_snapshots
+
+    return diff_snapshots(snapshot_a, snapshot_b)
+
+
 def load(
     agent_id: str,
     provider: str = "anthropic",
@@ -1069,6 +1132,10 @@ __all__ = [
     "ConfigurationError",
     "EmbeddingError",
     "EmbeddingProvider",
+    "CheckpointError",
+    "Snapshot",
+    "SnapshotMeta",
+    "SnapshotDiff",
     "Fact",
     "FactType",
     "MemoryPolicy",
