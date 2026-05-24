@@ -30,7 +30,7 @@ from datetime import datetime, timezone
 
 from ..cso.types import Fact
 from ..semantic.base import EmbeddingProvider
-from ..semantic.index import _dot
+from .._fastmath import dot as _dot
 
 
 @dataclass

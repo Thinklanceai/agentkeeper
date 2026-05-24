@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from ..cso.types import CognitiveStateObject
+from ..cso.types import CognitiveStateObject, Fact
 from ..semantic.base import EmbeddingProvider
 from .consolidation import (
     ConsolidationConfig,
@@ -130,7 +130,7 @@ def compress(
     )
 
     if config.run_expiration:
-        kept: list = []
+        kept: list[Fact] = []
         purged = 0
         for f in cso.memory_facts:
             # Protected facts are never purged by expiration — defensive

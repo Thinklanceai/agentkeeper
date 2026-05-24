@@ -119,8 +119,8 @@ class SqliteVecIndex(VectorIndex):
         self._dimension = dimension
         self._agent_id = agent_id
         self._table = f"vec_idx_{_sanitise_agent_id(agent_id)}"
-        self._db_path = db_path or os.getenv(
-            "AGENTKEEPER_DB", "agentkeeper.db"
+        self._db_path: str = (
+            db_path or os.getenv("AGENTKEEPER_DB") or "agentkeeper.db"
         )
 
         self._conn = sqlite3.connect(self._db_path)
