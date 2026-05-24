@@ -32,7 +32,7 @@ def _backoff_seconds(
     attempt: int, base: float, cap: float, jitter: float
 ) -> float:
     """Compute a backoff delay with bounded exponential growth + jitter."""
-    raw = min(cap, base * (2 ** max(0, attempt - 1)))
+    raw: float = min(cap, base * (2 ** max(0, attempt - 1)))
     return raw + random.random() * jitter
 
 

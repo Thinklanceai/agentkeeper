@@ -20,7 +20,12 @@ import sys
 from datetime import datetime, timezone
 
 from ..adapters.base import BaseAdapter, MockAdapter
+from typing import TYPE_CHECKING
+
 from .cross_model import run_cross_model_benchmark
+
+if TYPE_CHECKING:
+    from .cross_model import CrossModelReport
 
 
 def _try_live_adapter(provider: str) -> BaseAdapter | None:
@@ -86,7 +91,7 @@ def _build_adapter_map() -> dict[str, BaseAdapter]:
     return mapping
 
 
-def _to_markdown(report) -> str:
+def _to_markdown(report: CrossModelReport) -> str:
     """Render a CrossModelReport as a markdown table."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lines = [
