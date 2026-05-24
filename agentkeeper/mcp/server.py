@@ -263,6 +263,52 @@ def build_server(
         """
         return {"purged": agent.purge_expired()}
 
+    @mcp.tool
+    def checkpoint(
+        label: str | None = None,
+        execution_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Freeze the agent's cognitive state into an immutable snapshot.
+
+        Args:
+            label: Optional human-readable label.
+            execution_state: Optional opaque, JSON-serialisable payload
+                (e.g. current file, pending task, open todos). Stored and
+                returned verbatim; never interpreted or executed.
+
+        Returns:
+            The snapshot metadata (id, hash, counts) as a dict.
+        """
+        snap = agent.checkpoint(label=label, execution_state=execution_state)
+        return snap.meta.to_dict()
+
+    @mcp.tool
+    def restore(snapshot_id: str) -> dict[str, Any]:
+        """Restore the agent's cognitive state from a checkpoint.
+
+        Replaces the in-memory state and persists it. Identity, facts,
+        and graph are rebuilt from the snapshot; reconstruction is
+        deterministic (verified by content hash).
+
+        Args:
+            snapshot_id: The checkpoint id to restore (cp_...).
+
+        Returns:
+            A status dict with the restored snapshot id and verification.
+        """
+        agent.restore(snapshot_id)
+        agent.save()
+        return {"restored": snapshot_id, "ok": True}
+
+    @mcp.tool
+    def list_checkpoints() -> list[dict[str, Any]]:
+        """List this agent's checkpoints, oldest first.
+
+        Returns:
+            A list of snapshot metadata dicts (id, label, hash, counts).
+        """
+        return [m.to_dict() for m in agent.list_checkpoints()]
+
     # ----- Resources -----
 
     @mcp.resource("agentkeeper://identity")
