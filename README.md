@@ -122,7 +122,42 @@ agentkeeper-mcp --agent-id aria --provider anthropic
 }
 ```
 
-Available tools over MCP: `add_fact`, `recall`, `set_identity`, `link`, `find_related`, `compress`, `health`, `gdpr_export`, `purge_expired`.
+Available tools over MCP: `add_fact`, `recall`, `set_identity`, `link`, `find_related`, `compress`, `health`, `gdpr_export`, `purge_expired`, `checkpoint`, `restore`, `list_checkpoints`.
+
+### 6. Checkpoints — snapshot, restore, survive a crash
+
+Freeze the full cognitive state into an immutable, content-hashed
+snapshot. Restore it after a crash, a context-window overflow, a model
+switch, or a process restart. Attach an opaque `execution_state` payload
+(current file, pending task, todos) — AgentKeeper stores and returns it
+verbatim; it never interprets or runs it.
+
+```python
+snap = agent.checkpoint(
+    label="before refactor",
+    execution_state={
+        "current_file": "auth.py",
+        "pending_task": "finish RS256 migration",
+    },
+)
+
+# crash, restart, switch model — the process memory is gone
+agent = agentkeeper.load("aria").restore(snap.snapshot_id)
+# identity, facts, graph, and execution_state are back
+
+agentkeeper.diff(snap_a, snap_b)   # factual diff: facts added/removed/modified
+agent.list_checkpoints()           # every snapshot, oldest first
+```
+
+Reconstruction is deterministic — the same snapshot always rebuilds the
+same cognitive state, verified by a content hash. *Behaviour* is not
+guaranteed: AgentKeeper restores the agent's state, not the model's next
+decision. The crash-recovery demo runs with no API key:
+
+```bash
+python examples/crash_recovery.py
+```
+
 
 ---
 
@@ -322,7 +357,7 @@ snapshot = agent.health()
 - **Typed exceptions** — `AgentKeeperError` root, subclasses for every failure mode.
 - **Structured logging** — namespaced under `agentkeeper.*`, opt-in, `NullHandler` default.
 - **Retries** — exponential backoff + jitter via `with_retry` / `with_async_retry`.
-- **Tested** — 459 tests, CI on Python 3.10 / 3.11 / 3.12.
+- **Tested** — 491 tests, CI on Python 3.10 / 3.11 / 3.12.
 - **Zero breaking changes from v0.1** — `agent.remember(content, critical=True)` still works.
 
 ---
@@ -354,7 +389,7 @@ The demo runs entirely on `provider="mock"` and `AGENTKEEPER_EMBEDDING_PROVIDER=
 
 ## Roadmap
 
-- **v1.1** ✅ — TTL, graph layer, encrypted storage, MCP server, LangChain + CrewAI integrations, persistent `sqlite-vec` index, GDPR export, health snapshot, 459 tests.
+- **v1.1** ✅ — TTL, graph layer, encrypted storage, MCP server, LangChain + CrewAI integrations, persistent `sqlite-vec` index, GDPR export, health snapshot, cognitive checkpoints (snapshot / restore / diff), 491 tests.
 - **v1.2** — Postgres storage backend (full implementation), TypeScript SDK.
 - **v1.3** — AgentKeeper Cloud (managed sync). OSS stays feature-complete.
 
