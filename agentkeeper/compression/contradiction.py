@@ -28,9 +28,9 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from .._fastmath import dot as _dot
 from ..cso.types import Fact
 from ..semantic.base import EmbeddingProvider
-from .._fastmath import dot as _dot
 
 
 @dataclass

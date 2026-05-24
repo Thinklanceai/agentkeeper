@@ -24,8 +24,8 @@ Design boundaries (deliberate):
 
 from __future__ import annotations
 
-import hashlib
 import copy
+import hashlib
 import json
 import os
 import re

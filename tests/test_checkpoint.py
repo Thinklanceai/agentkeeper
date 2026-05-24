@@ -14,7 +14,6 @@ from agentkeeper.checkpoint import (
     CheckpointError,
     CheckpointStore,
     Snapshot,
-    build_snapshot,
     content_hash,
 )
 from agentkeeper.checkpoint.diff import diff_snapshots

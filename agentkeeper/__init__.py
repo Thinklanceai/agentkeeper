@@ -37,12 +37,12 @@ ANTHROPIC_API_KEY, GEMINI_API_KEY) or a running Ollama instance.
 
 from __future__ import annotations
 
-from .checkpoint import CheckpointError, Snapshot, SnapshotMeta  # noqa: E402,F401
-from .checkpoint.diff import SnapshotDiff  # noqa: E402,F401
-
 import os
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
+
+from .checkpoint import CheckpointError, Snapshot, SnapshotMeta  # noqa: E402,F401
+from .checkpoint.diff import SnapshotDiff  # noqa: E402,F401
 
 if TYPE_CHECKING:
     from .graph.relation_graph import RelationGraph
@@ -751,7 +751,7 @@ class Agent:
         self,
         label: str | None = None,
         execution_state: dict[str, Any] | None = None,
-    ) -> "Snapshot":
+    ) -> Snapshot:
         """Freeze the current cognitive state into an immutable snapshot.
 
         The optional ``execution_state`` is an opaque, JSON-serialisable
@@ -765,7 +765,7 @@ class Agent:
         )
         return CheckpointStore().save(snapshot)
 
-    def restore(self, snapshot_id: str) -> "Agent":
+    def restore(self, snapshot_id: str) -> Agent:
         """Restore cognitive state from a checkpoint, in memory.
 
         Replaces the in-memory CSO. Does not persist automatically:
@@ -778,7 +778,7 @@ class Agent:
         self._cso = CognitiveStateObject.from_dict(snapshot.cognitive_state)
         return self
 
-    def list_checkpoints(self) -> "list[SnapshotMeta]":
+    def list_checkpoints(self) -> list[SnapshotMeta]:
         """List checkpoints for this agent, oldest first."""
         from .checkpoint import CheckpointStore
 
@@ -1074,21 +1074,21 @@ def create(
     )
 
 
-def load_checkpoint(agent_id: str, snapshot_id: str) -> "Snapshot":
+def load_checkpoint(agent_id: str, snapshot_id: str) -> Snapshot:
     """Load a single checkpoint (read-only) without touching the agent."""
     from .checkpoint import CheckpointStore
 
     return CheckpointStore().load(agent_id, snapshot_id)
 
 
-def list_checkpoints(agent_id: str) -> "list[SnapshotMeta]":
+def list_checkpoints(agent_id: str) -> list[SnapshotMeta]:
     """List checkpoints for an agent id, oldest first."""
     from .checkpoint import CheckpointStore
 
     return CheckpointStore().list(agent_id)
 
 
-def diff(snapshot_a: "Snapshot", snapshot_b: "Snapshot") -> "SnapshotDiff":
+def diff(snapshot_a: Snapshot, snapshot_b: Snapshot) -> SnapshotDiff:
     """Factual diff between two snapshots (a = from, b = to)."""
     from .checkpoint.diff import diff_snapshots
 

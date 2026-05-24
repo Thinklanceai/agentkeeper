@@ -18,10 +18,9 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
-
-from ..adapters.base import BaseAdapter, MockAdapter
 from typing import TYPE_CHECKING
 
+from ..adapters.base import BaseAdapter, MockAdapter
 from .cross_model import run_cross_model_benchmark
 
 if TYPE_CHECKING:
