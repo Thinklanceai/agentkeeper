@@ -26,12 +26,14 @@ from .base import (
 )
 from .chatgpt import ChatGPTImporter, parse_memory_summary
 from .claude import ClaudeImporter
+from .gemini import GeminiImporter
 
 __all__ = [
     "SCOPE_GLOBAL",
     "BaseImporter",
     "ChatGPTImporter",
     "ClaudeImporter",
+    "GeminiImporter",
     "ImportError_",
     "ImportReport",
     "ImportedFact",
