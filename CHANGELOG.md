@@ -3,6 +3,40 @@
 All notable changes to AgentKeeper are documented here.
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-06-10
+
+Feature release. Adds platform memory importers and cross-platform
+knowledge comparison. No breaking changes.
+
+### Added
+
+- **Platform memory importers** (`agentkeeper.importers`) — bring your
+  AI memory into AgentKeeper from the official data exports.
+  `ChatGPTImporter` (export ZIP, extracted directory, or
+  `conversations.json`), `ClaudeImporter` (JSON and JSONL layouts,
+  plus `projects.json`), and `GeminiImporter` (Google Takeout activity
+  records, with non-Gemini services filtered out). Two-phase contract:
+  `parse()` is read-only and inspectable, `apply(agent)` writes and
+  returns an `ImportReport`.
+- **Strict scope namespacing.** Every imported fact carries
+  `metadata["scope"] == "platform:<name>"` — knowledge from one
+  platform never leaks into another's context unless explicitly
+  promoted. PII (account email, full name) is excluded unless
+  `include_pii=True`.
+- **Cross-platform comparison.** `compare_scopes(agent, a, b)` reports
+  what each platform knows that the other doesn't (`only_in_a`,
+  `only_in_b`, `shared`), using deterministic matching — normalized
+  content equality plus a `difflib` similarity ratio. No embeddings,
+  no LLM calls, no new dependencies. `scope_inventory(agent)` gives
+  per-scope fact counts by type in one call.
+- `parse_memory_summary(text)` — deterministic classifier (EN/FR) for
+  prompt-generated memory summaries, the flow used by 2026
+  cross-platform migration tools.
+- **Hardened archive handling.** Exports are parsed entirely in
+  memory; zip-bomb guards (member count, uncompressed size,
+  compression-ratio checks) and path-traversal rejection. HTML Takeout
+  exports are rejected with an actionable message.
+
 ## [1.1.3] — 2026-05-24
 
 Feature release. Adds cognitive checkpoints. No breaking changes.

@@ -158,6 +158,47 @@ decision. The crash-recovery demo runs with no API key:
 python examples/crash_recovery.py
 ```
 
+### 7. Own your AI memory — import ChatGPT, Claude, and Gemini
+
+Every AI platform remembers things about you. None of them show you
+what, and none of them talk to each other. AgentKeeper imports the
+official data exports of all three into one scoped, queryable memory —
+then tells you exactly what each platform knows that the others don't.
+
+```python
+import agentkeeper
+from agentkeeper.importers import (
+    ChatGPTImporter, ClaudeImporter, GeminiImporter,
+    compare_scopes, scope_inventory,
+)
+
+agent = agentkeeper.create("my-memory")
+ChatGPTImporter("chatgpt-export.zip").apply(agent)
+ClaudeImporter("claude-export.zip").apply(agent)
+GeminiImporter("takeout.zip").apply(agent)
+
+print(scope_inventory(agent))
+# {"platform:chatgpt": {"EVENT": 142, "PREFERENCE": 9, ...},
+#  "platform:claude":  {"EVENT": 87,  "FACT": 4, ...}, ...}
+
+result = compare_scopes(agent, "platform:chatgpt", "platform:claude")
+# ChatGPT only: ['Building a touring platform for electronic music']
+# Claude only:  ['Working on an EU AI Act observatory']
+# Shared:       [('My name is Tom, developer in Brussels', 1.0)]
+```
+
+Every imported fact is namespaced (`metadata["scope"] ==
+"platform:chatgpt"`), so knowledge from one platform never leaks into
+another's context unless you promote it. Matching is deterministic —
+normalized content equality plus a `difflib` ratio, no embeddings, no
+LLM calls, reproducible to the byte. PII (account email, full name)
+stays out unless you pass `include_pii=True`. Archives are parsed in
+memory with zip-bomb and path-traversal guards; nothing is ever
+extracted to disk.
+
+Also ships `parse_memory_summary(text)` for the prompt-generated memory
+summaries used by the 2026 cross-platform migration flows.
+
 
 ---
 
