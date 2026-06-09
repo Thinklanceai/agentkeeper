@@ -25,11 +25,13 @@ from .base import (
     platform_scope,
 )
 from .chatgpt import ChatGPTImporter, parse_memory_summary
+from .claude import ClaudeImporter
 
 __all__ = [
     "SCOPE_GLOBAL",
     "BaseImporter",
     "ChatGPTImporter",
+    "ClaudeImporter",
     "ImportError_",
     "ImportReport",
     "ImportedFact",
